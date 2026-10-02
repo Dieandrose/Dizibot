@@ -60,13 +60,18 @@ class DiziBotManager:
         self._register_handlers()
         self.is_processing_queue = False
 
-    async def get_or_create_series_topic(self, series_title: str) -> int:
-        clean_title, _, _ = Downloader.parse_title_season_episode(series_title)
-        existing_id = db.get_topic_id(clean_title)
+    async def get_or_create_series_topic(self, series_title: str, is_movie: bool = False) -> int:
+        if is_movie:
+            target_key = "Filmler"
+            topic_name = "🎬 Filmler"
+        else:
+            target_key, _, _ = Downloader.parse_title_season_episode(series_title)
+            topic_name = f"🎬 {target_key}"
+
+        existing_id = db.get_topic_id(target_key)
         if existing_id:
             return existing_id
 
-        topic_name = f"🎬 {clean_title}"
         api_url = f"https://api.telegram.org/bot{config.bot_token}/createForumTopic"
         async with httpx.AsyncClient(timeout=15.0) as client:
             try:
@@ -77,7 +82,7 @@ class DiziBotManager:
                 res_data = resp.json()
                 if res_data.get("ok"):
                     new_topic_id = res_data["result"]["message_thread_id"]
-                    db.save_topic(clean_title, new_topic_id)
+                    db.save_topic(target_key, new_topic_id)
                     logger.info(f"Yeni Forum Konusu Açıldı: '{topic_name}' (ID: {new_topic_id})")
                     return new_topic_id
                 else:
@@ -349,8 +354,26 @@ class DiziBotManager:
                         job_id = db.add_to_queue(title=clean_title, season=target_s, episode=1, priority=3)
                         await status_msg.edit_text(f"🚀 **Dark İsteği Başlatıldı:** '{clean_title} S{target_s:02d}E01' kuyruğa alındı! (İşlem ID: `{job_id}`)")
                 else:
-                    job_id = db.add_to_queue(title=clean_title, season=s, episode=e, priority=3)
-                    await message.reply_text(f"🚀 **Dark İsteği Başlatıldı:** '{clean_title} S{s:02d}E{e:02d}' onaysız olarak doğrudan kuyruğa alındı ve indirme başladı! (İşlem ID: `{job_id}`)")
+                    # İçeriğin Dizi mi Film mi olduğunu kontrol et
+                    results = await Downloader.search_all_plugins(clean_title)
+                    is_series_found = False
+                    if results:
+                        try:
+                            item = results[0]
+                            detail = await local_load_item(item.get("plugin_name", ""), item.get("url", ""))
+                            episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
+                            if episodes and (len(episodes) > 1 or (episodes[0].get("episode", 0) if isinstance(episodes[0], dict) else getattr(episodes[0], "episode", 0)) > 1):
+                                is_series_found = True
+                        except Exception:
+                            pass
+
+                    # Eğer sezon/bölüm formatı girilmemişse ve dizi değilse Film olarak kuyruğa al
+                    if not has_explicit_ep and not is_series_found and s == 1 and e == 1:
+                        job_id = db.add_to_queue(title=clean_title, season=0, episode=0, priority=3)
+                        await message.reply_text(f"🚀 **Dark İsteği Başlatıldı:** '{clean_title}' (Film) onaysız olarak doğrudan kuyruğa alındı ve '🎬 Filmler' konusuna yükleniyor! (İşlem ID: `{job_id}`)")
+                    else:
+                        job_id = db.add_to_queue(title=clean_title, season=s, episode=e, priority=3)
+                        await message.reply_text(f"🚀 **Dark İsteği Başlatıldı:** '{clean_title} S{s:02d}E{e:02d}' onaysız olarak doğrudan kuyruğa alındı ve indirme başladı! (İşlem ID: `{job_id}`)")
 
                 asyncio.create_task(self.process_queue())
                 return
@@ -421,7 +444,7 @@ class DiziBotManager:
             data = query.data
             user_id = query.from_user.id
 
-            # 1. Arama Sonucu Seçimi -> Sezonları Getir
+            # 1. Arama Sonucu Seçimi -> Dizi ise Sezonları, Film ise İndirme Butonunu Getir
             if data.startswith("sel_res:"):
                 idx = int(data.split(":")[1])
                 user_cache = SEARCH_CACHE.get(str(user_id), [])
@@ -438,7 +461,16 @@ class DiziBotManager:
                 try:
                     detail = await local_load_item(plugin, url)
                     episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
-                    if episodes:
+                    
+                    # Dizi Kontrolü: Bölüm listesi var ve birden fazla bölüm veya sezon bilgisi içeriyor mu?
+                    is_series = bool(episodes and len(episodes) > 0 and (
+                        len(episodes) > 1 or 
+                        (episodes[0].get("season", 0) if isinstance(episodes[0], dict) else getattr(episodes[0], "season", 0)) > 0 or
+                        (episodes[0].get("episode", 0) if isinstance(episodes[0], dict) else getattr(episodes[0], "episode", 0)) > 1 or
+                        "/dizi/" in url or "/tv/" in url or "diziler" in url
+                    ))
+
+                    if is_series:
                         seasons = sorted(set(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1) for ep in episodes))
                         s_buttons = []
                         row = []
@@ -451,16 +483,38 @@ class DiziBotManager:
                             s_buttons.append(row)
 
                         await query.edit_message_text(
-                            f"🎬 **{title}**\nLütfen indirmek istediğiniz sezonu seçin:",
+                            f"🎬 **{title}** (Dizi)\nLütfen indirmek istediğiniz sezonu seçin:",
                             reply_markup=InlineKeyboardMarkup(s_buttons)
                         )
                     else:
-                        # Film veya Tek Parça
-                        job_id = db.add_to_queue(title=title, season=1, episode=1, plugin_name=plugin, item_url=url, priority=3)
-                        await query.edit_message_text(f"✅ **{title}** indirme kuyruğuna eklendi! (İşlem ID: `{job_id}`)")
-                        asyncio.create_task(self.process_queue())
+                        # Film veya Tek Parça İçerik -> Filmler Konusuna Aktarılacak
+                        btn = InlineKeyboardMarkup([[
+                            InlineKeyboardButton("📥 FİLMİ İNDİR & YÜKLE", callback_data=f"dl_movie:{idx}")
+                        ]])
+                        await query.edit_message_text(
+                            f"🎬 **{title}**\n📌 **Tür:** Film / Tek Parça\n\nBu içerik doğrudan **'🎬 Filmler'** konusuna yüklenecektir.",
+                            reply_markup=btn
+                        )
                 except Exception as e:
                     await query.edit_message_text(f"❌ Detay yüklenemedi: {e}")
+
+            # 1.1 Film İndirme Tetikleme
+            elif data.startswith("dl_movie:"):
+                idx = int(data.split(":")[1])
+                user_cache = SEARCH_CACHE.get(str(user_id), [])
+                if not user_cache or idx >= len(user_cache):
+                    await query.answer("⚠️ Süre aşımı.", show_alert=True)
+                    return
+
+                selected_item = user_cache[idx]
+                title = selected_item.get("title", "")
+                plugin = selected_item.get("plugin_name", "")
+                url = selected_item.get("url", "")
+
+                job_id = db.add_to_queue(title=title, season=0, episode=0, plugin_name=plugin, item_url=url, priority=3)
+                await query.answer("✅ Film kuyruğa eklendi!")
+                await query.edit_message_text(f"✅ **{title}** (Film) indirme kuyruğuna alındı! (İşlem ID: `{job_id}`)\n'🎬 Filmler' konusuna yüklenecektir.")
+                asyncio.create_task(self.process_queue())
 
             # 2. Sezon Seçimi -> Bölümleri Getir
             elif data.startswith("sel_s:"):
@@ -668,13 +722,16 @@ class DiziBotManager:
         season = job["season"]
         episode = job["episode"]
 
+        is_movie = (season == 0 and episode == 0) or (season == 0)
         clean_title, _, _ = Downloader.parse_title_season_episode(title)
-        logger.info(f"Kuyruk İşleniyor: #{job_id} | {clean_title} S{season:02d}E{episode:02d}")
+        
+        disp_title = f"{clean_title} (Film)" if is_movie else f"{clean_title} S{season:02d}E{episode:02d}"
+        logger.info(f"Kuyruk İşleniyor: #{job_id} | {disp_title}")
         db.update_queue_progress(job_id, "downloading", 0.0)
         self._check_disk_space()
 
-        # 1. Konu ID'sini Bul / Aç
-        topic_id = await self.get_or_create_series_topic(clean_title)
+        # 1. Konu ID'sini Bul / Aç (Filmler tekil '🎬 Filmler' konusuna, Diziler kendi dizisi konusuna)
+        topic_id = await self.get_or_create_series_topic(clean_title, is_movie=is_movie)
 
         # 2. Aday Akışları Bul (Fallback zinciri)
         candidates = await Downloader.find_all_candidate_streams(clean_title, season, episode)
@@ -690,11 +747,11 @@ class DiziBotManager:
                 stream_url = cand["url"]
                 logger.info(f"Denenen Kaynak: [{p_name}] -> {stream_url}")
 
-                temp_file = TEMP_DIR / f"job_{job_id}_{clean_title}_S{season}E{episode}.mp4"
+                temp_file = TEMP_DIR / f"job_{job_id}_{clean_title}_{'movie' if is_movie else f'S{season}E{episode}'}.mp4"
                 
                 def prog_cb(pct: float, done_seg: int = 0, tot_seg: int = 0):
                     LIVE_TRANSFERS[job_id] = {
-                        "title": f"{clean_title} S{season:02d}E{episode:02d}",
+                        "title": disp_title,
                         "phase": "downloading",
                         "progress": pct,
                         "current_seg": done_seg,
@@ -729,7 +786,7 @@ class DiziBotManager:
 
                 # Telegram'a Yükle (Canlı İlerleme Takibi)
                 db.update_queue_progress(job_id, "uploading", 0.75)
-                logger.info(f"Telegram Konusuna Yükleniyor: '{clean_title} S{season:02d}E{episode:02d}' (Topic: {topic_id})")
+                logger.info(f"Telegram Konusuna Yükleniyor: '{disp_title}' (Topic: {topic_id})")
 
                 upload_start = time.time()
                 last_db_up = 0.0
@@ -741,7 +798,7 @@ class DiziBotManager:
                     elapsed = max(0.1, now - upload_start)
                     speed_mb = (current / (1024 * 1024)) / elapsed
                     LIVE_TRANSFERS[job_id] = {
-                        "title": f"{clean_title} S{season:02d}E{episode:02d}",
+                        "title": disp_title,
                         "phase": "uploading",
                         "current": current,
                         "total": total,
@@ -753,12 +810,22 @@ class DiziBotManager:
                         last_db_up = now
                         db.update_queue_progress(job_id, "uploading", 0.75 + pct * 0.25)
 
-                caption = (
-                    f"🎬 **{clean_title}**\n"
-                    f"📌 **{season}. Sezon {episode}. Bölüm**\n"
-                    f"📦 **Boyut:** {f_size / (1024*1024):.1f} MB\n\n"
-                    f"🌐 **Daha Fazlası İçin :**  izle.darkbox.com.tr:9443"
-                )
+                if is_movie:
+                    caption = (
+                        f"🎬 **{clean_title}**\n\n"
+                        f"📌 **Tür:** Film\n"
+                        f"📺 **Kaynak:** {p_name}\n"
+                        f"📦 **Boyut:** {f_size / (1024*1024):.1f} MB\n\n"
+                        f"🌐 **Daha Fazlası İçin :**  izle.darkbox.com.tr:9443"
+                    )
+                else:
+                    caption = (
+                        f"🎬 **{clean_title}**\n"
+                        f"📌 **{season}. Sezon {episode}. Bölüm**\n"
+                        f"📺 **Kaynak:** {p_name}\n"
+                        f"📦 **Boyut:** {f_size / (1024*1024):.1f} MB\n\n"
+                        f"🌐 **Daha Fazlası İçin :**  izle.darkbox.com.tr:9443"
+                    )
 
                 try:
                     sent_msg = await self.app.send_video(
@@ -771,13 +838,14 @@ class DiziBotManager:
                         progress=upload_prog
                     )
                     msg_id = sent_msg.id if sent_msg else 0
-                    db.log_upload(p_name, cand.get("ep_url", ""), f"{clean_title} S{season:02d}E{episode:02d}", season, episode, "uploaded", msg_id, f_size)
+                    db.log_upload(p_name, cand.get("ep_url", ""), disp_title, season, episode, "uploaded", msg_id, f_size)
                     db.update_queue_progress(job_id, "completed", 1.0)
                     uploaded_ok = True
                     logger.info(f"✅ Başarıyla Yüklendi! Mesaj ID: {msg_id}")
                     
-                    # İşlem Sonrası Otomatik Eksik Bölüm Kontrolü (Auto-Healer Hook)
-                    asyncio.create_task(self._auto_heal_hook(clean_title, season))
+                    # İşlem Sonrası Otomatik Eksik Bölüm Kontrolü (Sadece Diziler için)
+                    if not is_movie:
+                        asyncio.create_task(self._auto_heal_hook(clean_title, season))
                     break
                 except Exception as upload_err:
                     logger.error(f"Telegram yükleme hatası: {upload_err}")

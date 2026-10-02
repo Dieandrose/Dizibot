@@ -205,7 +205,7 @@ class Downloader:
 
     @classmethod
     async def find_all_candidate_streams(cls, query_title: str, target_s: int, target_e: int) -> List[Dict[str, Any]]:
-        """DarkBox eklentilerinde arama yapar ve hedef sezon/bölüm için tüm alternatif akışları toplar."""
+        """DarkBox eklentilerinde arama yapar ve hedef sezon/bölüm (veya film) için tüm alternatif akışları toplar."""
         candidates = []
         results = await cls.search_all_plugins(query_title)
         if not results:
@@ -223,14 +223,11 @@ class Downloader:
                 if not detail:
                     return []
                 episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
-                for ep in episodes:
-                    s_num = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
-                    e_num = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
-                    ep_url = ep.get("url", "") if isinstance(ep, dict) else getattr(ep, "url", "")
-                    ep_title = ep.get("title", "") if isinstance(ep, dict) else getattr(ep, "title", "")
-
-                    if s_num == target_s and e_num == target_e and ep_url:
-                        links = await asyncio.wait_for(local_load_links(p_name, ep_url), timeout=8)
+                
+                # Film veya Tekil İçerik Durumu (Bölüm listesi yok veya target_s == 0)
+                if not episodes or target_s == 0:
+                    try:
+                        links = await asyncio.wait_for(local_load_links(p_name, i_url), timeout=8)
                         for l in links:
                             link_name = l.get("name", "Akış") if isinstance(l, dict) else getattr(l, "name", "Akış")
                             link_url = l.get("url", "") if isinstance(l, dict) else getattr(l, "url", "")
@@ -239,9 +236,56 @@ class Downloader:
                                     "plugin": p_name,
                                     "name": link_name,
                                     "url": link_url,
-                                    "ep_url": ep_url,
-                                    "title": ep_title
+                                    "ep_url": i_url,
+                                    "title": detail.get("title", "") or item.get("title", "")
                                 })
+                    except Exception:
+                        pass
+
+                    # Episodes içinde tekil bölüm varsa onu da dene
+                    if not cand_list and episodes:
+                        for ep in episodes:
+                            ep_url = ep.get("url", "") if isinstance(ep, dict) else getattr(ep, "url", "")
+                            if ep_url:
+                                try:
+                                    links = await asyncio.wait_for(local_load_links(p_name, ep_url), timeout=8)
+                                    for l in links:
+                                        link_name = l.get("name", "Akış") if isinstance(l, dict) else getattr(l, "name", "Akış")
+                                        link_url = l.get("url", "") if isinstance(l, dict) else getattr(l, "url", "")
+                                        if link_url:
+                                            cand_list.append({
+                                                "plugin": p_name,
+                                                "name": link_name,
+                                                "url": link_url,
+                                                "ep_url": ep_url,
+                                                "title": detail.get("title", "") or item.get("title", "")
+                                            })
+                                except Exception:
+                                    pass
+                else:
+                    # Dizi Durumu (Sezon / Bölüm eşleştirme)
+                    for ep in episodes:
+                        s_num = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
+                        e_num = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                        ep_url = ep.get("url", "") if isinstance(ep, dict) else getattr(ep, "url", "")
+                        ep_title = ep.get("title", "") if isinstance(ep, dict) else getattr(ep, "title", "")
+
+                        if s_num == target_s and e_num == target_e and ep_url:
+                            try:
+                                links = await asyncio.wait_for(local_load_links(p_name, ep_url), timeout=8)
+                                for l in links:
+                                    link_name = l.get("name", "Akış") if isinstance(l, dict) else getattr(l, "name", "Akış")
+                                    link_url = l.get("url", "") if isinstance(l, dict) else getattr(l, "url", "")
+                                    if link_url:
+                                        cand_list.append({
+                                            "plugin": p_name,
+                                            "name": link_name,
+                                            "url": link_url,
+                                            "ep_url": ep_url,
+                                            "title": ep_title
+                                        })
+                            except Exception:
+                                pass
             except Exception as ex:
                 logger.debug(f"{p_name} link çözümleme atlandı: {ex}")
             return cand_list
