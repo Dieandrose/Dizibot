@@ -51,6 +51,9 @@ async def main():
     bot_me = await bot_manager.app.get_me()
     logger.info(f"Bot Başarıyla Giriş Yaptı: @{bot_me.username} ({bot_me.first_name})")
 
+    # Yarım kalan işleri sıfırla
+    db.reset_stale_queue_items()
+
     # Watchlist Tracker'ı Arka Planda Başlat
     tracker_task = asyncio.create_task(tracker.run_loop())
     
@@ -58,13 +61,11 @@ async def main():
     async def queue_worker():
         while True:
             try:
-                if not bot_manager.is_processing_queue:
-                    next_job = db.get_next_queue_item()
-                    if next_job:
-                        asyncio.create_task(bot_manager.process_queue())
+                if not bot_manager.is_processing_queue and db.has_pending_jobs():
+                    await bot_manager.process_queue()
             except Exception as e:
                 logger.error(f"Kuyruk worker hatası: {e}")
-            await asyncio.sleep(5)
+            await asyncio.sleep(4)
 
     queue_task = asyncio.create_task(queue_worker())
 

@@ -269,6 +269,22 @@ class Database:
             conn.commit()
             return cur.lastrowid or 0
 
+    def reset_stale_queue_items(self):
+        """Sunucu/bot yeniden başladığında yarım kalan (claimed/downloading) işleri 'queued' durumuna çeker."""
+        with self._get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE download_queue SET status = 'queued', progress = 0.0 WHERE status IN ('claimed', 'downloading', 'uploading')"
+            )
+            conn.commit()
+
+    def has_pending_jobs(self) -> bool:
+        """Kuyrukta bekleyen 'queued' durumunda iş olup olmadığını kontrol eder (claim etmeden)."""
+        with self._get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT id FROM download_queue WHERE status = 'queued' LIMIT 1")
+            return cur.fetchone() is not None
+
     def get_next_queue_item(self) -> Optional[Dict[str, Any]]:
         with self._get_conn() as conn:
             cur = conn.cursor()
