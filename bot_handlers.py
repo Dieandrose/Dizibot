@@ -649,6 +649,9 @@ class DiziBotManager:
                 detail = await local_load_item(plugin, url)
                 episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
                 ep_buttons = []
+                # En üste SEÇİLİ SEZONU İNDİR butonu
+                ep_buttons.append([InlineKeyboardButton(f"📥 {season}. SEZONU İNDİR (Tüm Bölümler)", callback_data=f"dl_all_s:{idx}:{season}")])
+
                 row = []
                 for ep in episodes:
                     s_num = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
@@ -660,10 +663,9 @@ class DiziBotManager:
                             row = []
                 if row:
                     ep_buttons.append(row)
-                ep_buttons.append([InlineKeyboardButton("📥 TÜM SEZONU İNDİR", callback_data=f"dl_all_s:{idx}:{season}")])
 
                 await query.edit_message_text(
-                    f"🎬 **{title}** - **{season}. Sezon**\nİndirmek istediğiniz bölümü seçin:",
+                    f"🎬 **{title}** - **{season}. Sezon**\nSezonun tamamını tek tıkla indirebilir veya tekil bölüm seçebilirsiniz:",
                     reply_markup=InlineKeyboardMarkup(ep_buttons)
                 )
 
