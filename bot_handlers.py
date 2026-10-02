@@ -119,8 +119,7 @@ class DiziBotManager:
                             description=desc[:100],
                             thumb_url=thumb_url,
                             input_message_content=InputTextMessageContent(
-                                f"🎬 **{title}**\n"
-                                f"⚡ **Kaynak:** #{plugin}\n\n"
+                                f"🎬 **{title}**\n\n"
                                 f"🌐 **Daha Fazlası İçin :**  izle.darkbox.com.tr:9443"
                             ),
                             reply_markup=InlineKeyboardMarkup([
@@ -928,7 +927,6 @@ class DiziBotManager:
                     caption = (
                         f"🎬 **{clean_title}**\n\n"
                         f"📌 **Tür:** Film\n"
-                        f"📺 **Kaynak:** {p_name}\n"
                         f"📦 **Boyut:** {f_size / (1024*1024):.1f} MB\n\n"
                         f"🌐 **Daha Fazlası İçin :**  izle.darkbox.com.tr:9443"
                     )
@@ -936,7 +934,6 @@ class DiziBotManager:
                     caption = (
                         f"🎬 **{clean_title}**\n"
                         f"📌 **{season}. Sezon {episode}. Bölüm**\n"
-                        f"📺 **Kaynak:** {p_name}\n"
                         f"📦 **Boyut:** {f_size / (1024*1024):.1f} MB\n\n"
                         f"🌐 **Daha Fazlası İçin :**  izle.darkbox.com.tr:9443"
                     )
