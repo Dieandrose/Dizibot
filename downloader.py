@@ -125,13 +125,40 @@ class Downloader:
         return 0.0
 
     @classmethod
+    def get_all_plugin_names(cls) -> List[str]:
+        """DarkBox bünyesindeki tüm 50+ eklentiyi öncelik sırasına göre döndürür."""
+        try:
+            from Public.API.v1.Libs.local_plugins import _plugin_names
+            all_names = list(_plugin_names())
+        except Exception:
+            all_names = []
+
+        # En popüler / öncelikli dizi ve film eklentileri
+        top_priority = [
+            "Dizi65", "DizipalX", "RecTV", "Vizyona", "SineWix", 
+            "FilmMakinesi", "FullHDFilmizlesene", "HDFilmCehennemi", "FilmModu", 
+            "Hdizipal", "JetFilmIzle", "Selcukflix", "SetFilmizle", "WebteIzle",
+            "Dizimom", "Dizimia", "Dizibal", "Dizibol", "Ddizi", "DiziKorea",
+            "DiziIzleClick", "DizifilmLife", "FilmCenneti", "FilmIzleCH", "Filmhane",
+            "FullHDFilmIzle", "HDFilmDelisi", "HDFilmUS", "RoketDizi", "SineMerkez",
+            "Sinezy", "TvFilmIzle", "WFilmIzle", "WebDramaTurkey", "ZxcPrime", "Aether", "MeowTV", "Medya"
+        ]
+
+        ordered = [p for p in top_priority if p in all_names]
+        for p in all_names:
+            if p not in ordered and p != "DarkTV":
+                ordered.append(p)
+
+        return ordered if ordered else config.plugins_priority
+
+    @classmethod
     async def search_all_plugins(cls, query: str) -> List[Dict[str, Any]]:
-        """DarkBox eklentilerinde paralel arama yapar ve akıllı alaka puanlamasıyla filtreler."""
-        plugins = config.plugins_priority
+        """DarkBox'taki TÜM 50+ eklentide paralel arama yapar ve akıllı alaka puanlamasıyla filtreler."""
+        plugins = cls.get_all_plugin_names()
         
         async def _search_plugin(p: str):
             try:
-                res = await asyncio.wait_for(local_search(p, query), timeout=4.0)
+                res = await asyncio.wait_for(local_search(p, query), timeout=3.5)
                 out = []
                 for item in res:
                     title = item.get("title") if isinstance(item, dict) else (item.title if hasattr(item, "title") else str(item))
@@ -171,7 +198,7 @@ class Downloader:
         def sort_key(item):
             score = item.get("relevance_score", 0.0)
             p_name = item.get("plugin_name", "")
-            p_idx = config.plugins_priority.index(p_name) if p_name in config.plugins_priority else 99
+            p_idx = plugins.index(p_name) if p_name in plugins else 999
             return (score, -p_idx)
 
         flat.sort(key=sort_key, reverse=True)
@@ -226,12 +253,13 @@ class Downloader:
             if isinstance(r, list):
                 candidates.extend(r)
 
+        all_plugins = cls.get_all_plugin_names()
         # Eklenti önceliğine göre sırala
         def plugin_priority_key(c):
             p = c["plugin"]
-            if p in config.plugins_priority:
-                return config.plugins_priority.index(p)
-            return 99
+            if p in all_plugins:
+                return all_plugins.index(p)
+            return 999
 
         candidates.sort(key=plugin_priority_key)
         return candidates
