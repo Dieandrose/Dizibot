@@ -81,41 +81,81 @@ class Downloader:
         return clean, s_num, e_num
 
     @classmethod
+    async def search_all_plugins(cls, query: str) -> List[Dict[str, Any]]:
+        """DarkBox eklentilerinde paralel arama yapar ve tekilleştirilmiş liste döner."""
+        plugins = config.plugins_priority
+        
+        async def _search_plugin(p: str):
+            try:
+                res = await local_search(p, query)
+                out = []
+                for item in res:
+                    title = item.get("title") if isinstance(item, dict) else (item.title if hasattr(item, "title") else str(item))
+                    url = item.get("url") if isinstance(item, dict) else (item.url if hasattr(item, "url") else "")
+                    poster = item.get("poster") if isinstance(item, dict) else (item.poster if hasattr(item, "poster") else "")
+                    desc = item.get("description") if isinstance(item, dict) else (item.description if hasattr(item, "description") else "")
+                    if title and url:
+                        out.append({
+                            "title": title,
+                            "url": url,
+                            "poster": poster,
+                            "description": desc,
+                            "plugin_name": p
+                        })
+                return out
+            except Exception as e:
+                logger.debug(f"Plugin {p} search error: {e}")
+                return []
+
+        tasks = [_search_plugin(p) for p in plugins]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        flat = []
+        seen = set()
+        for r in results:
+            if isinstance(r, list):
+                for item in r:
+                    key = (item["plugin_name"], item["url"])
+                    if key not in seen:
+                        seen.add(key)
+                        flat.append(item)
+        return flat
+
+    @classmethod
     async def find_all_candidate_streams(cls, query_title: str, target_s: int, target_e: int) -> List[Dict[str, Any]]:
         """DarkBox eklentilerinde arama yapar ve hedef sezon/bölüm için tüm alternatif akışları toplar."""
         candidates = []
-        try:
-            results = await local_search(query_title)
-        except Exception as e:
-            logger.error(f"DarkBox arama hatası ({query_title}): {e}")
+        results = await cls.search_all_plugins(query_title)
+        if not results:
             return candidates
 
         norm_target = db._norm_title(query_title)
 
         for item in results:
-            item_title = item.title if hasattr(item, "title") else str(item)
-            plugin_name = item.plugin_name if hasattr(item, "plugin_name") else "DarkBox"
-            item_url = item.url if hasattr(item, "url") else ""
+            item_title = item.get("title", "")
+            plugin_name = item.get("plugin_name", "")
+            item_url = item.get("url", "")
 
             if norm_target not in db._norm_title(item_title):
                 continue
 
             try:
                 detail = await local_load_item(plugin_name, item_url)
-                if not detail or not hasattr(detail, "episodes"):
+                if not detail:
                     continue
 
-                for ep in detail.episodes:
-                    s_num = ep.season if hasattr(ep, "season") else (ep.get("season") if isinstance(ep, dict) else 1)
-                    e_num = ep.episode if hasattr(ep, "episode") else (ep.get("episode") if isinstance(ep, dict) else 1)
-                    ep_url = ep.url if hasattr(ep, "url") else (ep.get("url") if isinstance(ep, dict) else "")
-                    ep_title = ep.title if hasattr(ep, "title") else (ep.get("title") if isinstance(ep, dict) else "")
+                episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
+                for ep in episodes:
+                    s_num = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
+                    e_num = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                    ep_url = ep.get("url", "") if isinstance(ep, dict) else getattr(ep, "url", "")
+                    ep_title = ep.get("title", "") if isinstance(ep, dict) else getattr(ep, "title", "")
 
                     if s_num == target_s and e_num == target_e and ep_url:
                         links = await local_load_links(plugin_name, ep_url)
                         for l in links:
-                            link_name = l.name if hasattr(l, "name") else l.get("name", "Akış")
-                            link_url = l.url if hasattr(l, "url") else l.get("url", "")
+                            link_name = l.get("name", "Akış") if isinstance(l, dict) else getattr(l, "name", "Akış")
+                            link_url = l.get("url", "") if isinstance(l, dict) else getattr(l, "url", "")
                             if link_url:
                                 candidates.append({
                                     "plugin": plugin_name,

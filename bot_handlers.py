@@ -115,7 +115,7 @@ class DiziBotManager:
             msg = await message.reply_text(f"🔍 **'{query}'** tüm DarkBox eklentilerinde aranıyor...")
             
             try:
-                results = await local_search(query)
+                results = await Downloader.search_all_plugins(query)
             except Exception as e:
                 await msg.edit_text(f"❌ Arama sırasında hata oluştu: {e}")
                 return
@@ -126,9 +126,9 @@ class DiziBotManager:
 
             SEARCH_CACHE[str(message.from_user.id)] = results
             buttons = []
-            for idx, r in enumerate(results[:8]):
-                title = r.title if hasattr(r, "title") else str(r)
-                plugin = r.plugin_name if hasattr(r, "plugin_name") else "Kaynak"
+            for idx, r in enumerate(results[:12]):
+                title = r.get("title", "İçerik")
+                plugin = r.get("plugin_name", "Kaynak")
                 buttons.append([InlineKeyboardButton(f"🎬 {title} [{plugin}]", callback_data=f"sel_res:{idx}")])
 
             keyboard = InlineKeyboardMarkup(buttons)
@@ -287,15 +287,16 @@ class DiziBotManager:
                     return
 
                 selected_item = user_cache[idx]
-                title = selected_item.title if hasattr(selected_item, "title") else str(selected_item)
-                plugin = selected_item.plugin_name if hasattr(selected_item, "plugin_name") else "Kaynak"
-                url = selected_item.url if hasattr(selected_item, "url") else ""
+                title = selected_item.get("title", "")
+                plugin = selected_item.get("plugin_name", "Kaynak")
+                url = selected_item.get("url", "")
 
                 await query.answer("Detaylar yükleniyor...")
                 try:
                     detail = await local_load_item(plugin, url)
-                    if hasattr(detail, "episodes") and detail.episodes:
-                        seasons = sorted(set(ep.season if hasattr(ep, "season") else (ep.get("season", 1) if isinstance(ep, dict) else 1) for ep in detail.episodes))
+                    episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
+                    if episodes:
+                        seasons = sorted(set(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1) for ep in episodes))
                         s_buttons = []
                         row = []
                         for s in seasons:
@@ -328,16 +329,17 @@ class DiziBotManager:
                     return
 
                 selected_item = user_cache[idx]
-                plugin = selected_item.plugin_name
-                url = selected_item.url
-                title = selected_item.title
+                plugin = selected_item.get("plugin_name", "")
+                url = selected_item.get("url", "")
+                title = selected_item.get("title", "")
 
                 detail = await local_load_item(plugin, url)
+                episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
                 ep_buttons = []
                 row = []
-                for ep in detail.episodes:
-                    s_num = ep.season if hasattr(ep, "season") else (ep.get("season", 1) if isinstance(ep, dict) else 1)
-                    e_num = ep.episode if hasattr(ep, "episode") else (ep.get("episode", 1) if isinstance(ep, dict) else 1)
+                for ep in episodes:
+                    s_num = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
+                    e_num = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
                     if s_num == season:
                         row.append(InlineKeyboardButton(f"{e_num}. Bölüm", callback_data=f"dl_ep:{idx}:{s_num}:{e_num}"))
                         if len(row) == 4:
@@ -361,7 +363,7 @@ class DiziBotManager:
                     await query.answer("⚠️ Süre aşımı.", show_alert=True)
                     return
 
-                title = user_cache[idx].title
+                title = user_cache[idx].get("title", "")
                 job_id = db.add_to_queue(title=title, season=s_num, episode=e_num, priority=3)
                 await query.answer("✅ Kuyruğa eklendi!")
                 await query.edit_message_text(f"✅ **{title} S{s_num:02d}E{e_num:02d}** indirme kuyruğuna alındı! (İşlem ID: `{job_id}`)")
@@ -377,13 +379,14 @@ class DiziBotManager:
                     return
 
                 selected_item = user_cache[idx]
-                title = selected_item.title
-                detail = await local_load_item(selected_item.plugin_name, selected_item.url)
+                title = selected_item.get("title", "")
+                detail = await local_load_item(selected_item.get("plugin_name", ""), selected_item.get("url", ""))
+                episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
 
                 added = 0
-                for ep in detail.episodes:
-                    s = ep.season if hasattr(ep, "season") else (ep.get("season", 1) if isinstance(ep, dict) else 1)
-                    e = ep.episode if hasattr(ep, "episode") else (ep.get("episode", 1) if isinstance(ep, dict) else 1)
+                for ep in episodes:
+                    s = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
+                    e = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
                     if s == s_num:
                         db.add_to_queue(title=title, season=s, episode=e, priority=2)
                         added += 1

@@ -33,32 +33,31 @@ class WatchlistTracker:
 
     async def check_series(self, series_name: str):
         logger.info(f"Takip listesi kontrol ediliyor: {series_name}")
-        try:
-            results = await local_search(series_name)
-        except Exception as e:
-            logger.error(f"Tracker arama hatası ({series_name}): {e}")
+        results = await Downloader.search_all_plugins(series_name)
+        if not results:
             return
 
         norm_name = db._norm_title(series_name)
         
         for item in results:
-            item_title = item.title if hasattr(item, "title") else str(item)
-            plugin_name = item.plugin_name if hasattr(item, "plugin_name") else "DarkBox"
-            item_url = item.url if hasattr(item, "url") else ""
+            item_title = item.get("title", "")
+            plugin_name = item.get("plugin_name", "")
+            item_url = item.get("url", "")
 
             if norm_name not in db._norm_title(item_title):
                 continue
 
             try:
                 detail = await local_load_item(plugin_name, item_url)
-                if not detail or not hasattr(detail, "episodes"):
+                if not detail:
                     continue
 
-                for ep in detail.episodes:
-                    s_num = ep.season if hasattr(ep, "season") else (ep.get("season", 1) if isinstance(ep, dict) else 1)
-                    e_num = ep.episode if hasattr(ep, "episode") else (ep.get("episode", 1) if isinstance(ep, dict) else 1)
-                    ep_url = ep.url if hasattr(ep, "url") else (ep.get("url", "") if isinstance(ep, dict) else "")
-                    ep_title = ep.title if hasattr(ep, "title") else (ep.get("title", "") if isinstance(ep, dict) else "")
+                episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
+                for ep in episodes:
+                    s_num = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
+                    e_num = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                    ep_url = ep.get("url", "") if isinstance(ep, dict) else getattr(ep, "url", "")
+                    ep_title = ep.get("title", "") if isinstance(ep, dict) else getattr(ep, "title", "")
 
                     # Daha önce yüklendi mi kontrol et
                     if not db.is_title_ep_uploaded(series_name, s_num, e_num):
