@@ -1,16 +1,16 @@
 [Unit]
-Description=DarkBox Telegram MTProto Video Uploader Service
-After=network.target darkbox.service
+Description=DiziBot - Otonom Telegram Medya Dağıtım ve Takip Botu
+After=network.target
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/root/Darkbox
-ExecStart=/root/Darkbox/.venv/bin/python /root/Darkbox/tools/tg_uploader_bot.py
+WorkingDirectory=/root/dizibot
+ExecStart=/root/Darkbox/.venv/bin/python /root/dizibot/main.py
 Restart=always
-RestartSec=15
-StandardOutput=append:/root/Darkbox/data/tg_uploader.log
-StandardError=append:/root/Darkbox/data/tg_uploader.log
+RestartSec=10
+StandardOutput=append:/root/dizibot/data/dizibot.log
+StandardError=append:/root/dizibot/data/dizibot.log
 
 [Install]
 WantedBy=multi-user.target

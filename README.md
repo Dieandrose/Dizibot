@@ -1,56 +1,89 @@
-# DiziBot - Otonom Telegram Video ve Dizi Yükleyici
+# DiziBot - Otonom Telegram Medya Dağıtım ve Takip Botu
 
-DarkBox eklenti sağlayıcılarından dizi ve film içeriklerini otomatik arayan, < 2 GB boyut sınırına ve Türkçe ses kanalına göre filtreleyen, ses-görüntü senkronizasyonu yaparak Telegram forum konularına (Topic) aktaran otonom yükleyici bot.
-
----
-
-## 🚀 Özellikler
-
-- **Çoklu Eklenti Araması:** Tek bir kaynağa bağlı kalmadan DarkBox genelindeki tüm eklentilerde arama ve en kaliteli akışı seçme.
-- **2 GB Limit Koruması:** 2 GB ve üzerindeki hantal kaynakları otomatik eleyip kompakt (< 1.9 GB) ve kayıpsız 720p/1080p alternatiflere yönelme.
-- **HLS Türkçe Ses Ayıklama:** Ayrık ses akışına sahip master manifestlerde `tur` / `tr` / `Turkish` kanalını otomatik tespit edip indirme.
-- **Kusursuz Senkron (Muxing):** `aresample=async=1000:first_pts=0` filtresi ile ses ve görüntüyü tam kare/zaman senkronuyla birleştirme.
-- **Telegram Forum Topic Desteği:** Hedef gruptaki mevcut dizi konusunu (`topic_id`) otomatik bulma veya yeni konu oluşturup içine yükleme (`supports_streaming=True`).
+DarkBox eklenti ekosistemindeki kaynakları (Dizi65, DizipalX, RecTV, Vizyona vb.) tarayan, en uygun akışları seçip indiren, Telegram konularına (Forum Topic) doğrudan video olarak aktaran ve otomatik yeni bölüm takibi yapan interaktif medya botudur.
 
 ---
 
-## 🛠️ Kurulum
+## 🚀 Yeni Eklenen Özellikler
+
+### 1. 💬 Telegram Üzerinden Canlı Kontrol (Chat-Ops & Butonlar)
+- **İnteraktif Arama (`/ara <içerik>`):** DarkBox genelinde arama yapar, butonlu sonuç listesi sunar. Sezon ve bölümü butonlarla seçerek tek tıkla indirmeyi başlatır.
+- **Canlı Durum (`/durum`):** Aktif indirmeyi, ilerleme çubuğunu (`progress bar`), işlem durumunu ve yüklenenleri gösterir.
+- **Kuyruk Yönetimi (`/kuyruk` & `/iptal <id>`):** Kuyruktaki işleri listeleme ve yönetici iptal desteği.
+
+### 2. ⚡ Otomatik Yeni Bölüm Takipçisi (Auto-Tracker Daemon)
+- **Watchlist (`/takip <dizi>`):** Takip listesine eklenen dizileri arka planda periyodik olarak tarar.
+- **Otomatik Yükleme:** Yeni bir bölüm yayınlandığında kimse komut vermeden otomatik olarak tespit eder, indirir ve ilgili forum konusuna yükler.
+- **Liste Yönetimi:** `/takiplistesi` ve `/takipbirak <dizi>`.
+
+### 3. 🛡️ Akıllı Hata Yönetimi & Çoklu Kaynak Zinciri (Fallback Chain)
+- **Çoklu Kaynak:** Bir kaynakta 403, yavaş hız veya bozuk ses oluştuğunda durmadan sıradaki en uygun eklentiye (`Dizi65` ➔ `DizipalX` ➔ `RecTV` ➔ `Vizyona` ➔ `SineWix`...) otomatik geçer.
+- **HLS Türkçe Ses Tespiti:** Master M3U8'deki `LANGUAGE="tr"` / `LANGUAGE="tur"` / `NAME="Türkçe"` etiketlerini otomatik yakalar ve video ile senkronize eder.
+- **2 GB Limit Koruması:** 2 GB üzerindeki hantal dosyaları otomatik eleyerek optimize HD versiyonu seçer.
+- **Kusursuz Senkron:** `aresample=async=1000:first_pts=0` filtresi ile kayıpsız ses/görüntü birleştirme.
+
+### 4. 👥 Grup İstek & Yönetici Onay Sistemi
+- **Üye İstekleri (`/istek <içerik>`):** Grup üyeleri içerik talebinde bulunur.
+- **Admin Onay Butonları:** Yöneticilere `[✅ Onayla & Yükle]` ve `[❌ Reddet]` butonlu bildirim düşer.
+- **Otomasyon:** Yönetici onayladığı an içerik kuyruğa alınır, indirilir ve yüklendiğinde istek sahibine bildirim gider.
+
+---
+
+## 🛠️ Kurulum & Yapılandırma
 
 ```bash
 # Depoyu klonlayın
-git clone git@github.com:Dieandrose/dizibot.git
-cd dizibot
+git clone git@github.com:Dieandrose/Dizibot.git
+cd Dizibot
 
-# Sanal ortam oluşturun ve gereksinimleri yükleyin
+# Sanal ortam ve paketler
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# Yapılandırmayı oluşturun
+# Yapılandırma dosyasını oluşturun
 cp .env.example .env
 nano .env
 ```
 
----
-
-## 💻 Kullanım
-
-### Belirli Bir Dizi / Sezon / Bölüm Arama ve Yükleme
-```bash
-python tg_uploader_bot.py --search-and-upload "Mezarlık" 2 1
+### Ortam Değişkenleri (`.env`)
+```ini
+TG_BOT_TOKEN="123456789:ABCDefGhIjKlMnOpQrStUvWxYz"
+TG_API_ID="2040"
+TG_API_HASH="b18441a1ff607e10a989891a5462e627"
+TG_TARGET_CHAT_ID="-1001909587016"
+ADMIN_IDS="1080169172"
+TG_UPLOADER_PROXY="http://127.0.0.1:4000"
+TRACKER_INTERVAL="900"
+DARKBOX_ROOT="/root/Darkbox"
 ```
 
-### Genel Daemon Modu
-```bash
-python tg_uploader_bot.py
-```
+---
+
+## 💻 Kullanılabilir Komutlar
+
+| Komut | Açıklama |
+| :--- | :--- |
+| `/start`, `/yardim` | Bot yardım menüsü ve komut listesi |
+| `/ara <isim>` | Butonlu interaktif arama ve bölüm seçimi |
+| `/indir <dizi> <s_no> <b_no>` | Hızlı bölüm indirme ve yükleme |
+| `/durum` | Anlık indirme ilerlemesi ve işlem durumu |
+| `/kuyruk` | Kuyruktaki bekleyen görevler |
+| `/iptal <id>` | Kuyruktaki görevi iptal etme |
+| `/takip <dizi>` | Diziyi otomatik yeni bölüm takibine alma |
+| `/takiplistesi` | Takip edilen dizileri listeleme |
+| `/takipbirak <dizi>` | Diziyi takipten çıkarma |
+| `/istek <içerik>` | Dizi / film istek talebi oluşturma |
 
 ---
 
-## ⚙️ Systemd Servisi
+## 🔄 Systemd Servis Yönetimi
 
 ```bash
 cp dizibot.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now dizibot.service
+
+# Canlı logları izleme
+journalctl -u dizibot.service -f
 ```

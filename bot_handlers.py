@@ -1,0 +1,526 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+DiziBot Telegram Chat-Ops, Komutlar, Butonlar ve İstek Sistemi
+"""
+
+import os
+import re
+import sys
+import time
+import asyncio
+import logging
+import httpx
+from pathlib import Path
+from typing import Optional, List, Dict, Any, Tuple
+
+from pyrogram import Client, filters
+from pyrogram.types import (
+    Message, 
+    InlineKeyboardMarkup, 
+    InlineKeyboardButton, 
+    CallbackQuery
+)
+
+from config import config, TEMP_DIR
+from database import db
+from downloader import Downloader
+
+try:
+    from Public.API.v1.Libs.local_plugins import (
+        search as local_search,
+        load_item as local_load_item,
+        load_links as local_load_links
+    )
+except ImportError:
+    pass
+
+logger = logging.getLogger("DiziBot.Bot")
+
+# Bellek içi arama önbelleği (callback butonları için)
+SEARCH_CACHE: Dict[str, List[Any]] = {}
+
+
+class DiziBotManager:
+    def __init__(self):
+        self.app = Client(
+            name=config.session_name,
+            api_id=config.api_id,
+            api_hash=config.api_hash,
+            bot_token=config.bot_token
+        )
+        self._register_handlers()
+        self.is_processing_queue = False
+
+    async def get_or_create_series_topic(self, series_title: str) -> int:
+        clean_title, _, _ = Downloader.parse_title_season_episode(series_title)
+        existing_id = db.get_topic_id(clean_title)
+        if existing_id:
+            return existing_id
+
+        topic_name = f"🎬 {clean_title}"
+        api_url = f"https://api.telegram.org/bot{config.bot_token}/createForumTopic"
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            try:
+                resp = await client.post(api_url, json={
+                    "chat_id": config.target_chat_id,
+                    "name": topic_name[:128]
+                })
+                res_data = resp.json()
+                if res_data.get("ok"):
+                    new_topic_id = res_data["result"]["message_thread_id"]
+                    db.save_topic(clean_title, new_topic_id)
+                    logger.info(f"Yeni Forum Konusu Açıldı: '{topic_name}' (ID: {new_topic_id})")
+                    return new_topic_id
+                else:
+                    logger.error(f"Forum konusu açılamadı: {res_data}")
+            except Exception as e:
+                logger.error(f"createForumTopic hatası: {e}")
+
+        return 0
+
+    def _register_handlers(self):
+        # 1. /start ve /yardim
+        @self.app.on_message(filters.command(["start", "yardim", "help"]))
+        async def cmd_start(client: Client, message: Message):
+            help_text = (
+                "🤖 **DiziBot - Otonom Medya & Telegram Yükleyici**\n\n"
+                "**Kullanılabilir Komutlar:**\n"
+                "🔍 `/ara <dizi/film>` - İçerik ara ve butonlarla seçerek indir\n"
+                "📥 `/indir <dizi> <sezon> <bölüm>` - Doğrudan bölüm indir ve yükle\n"
+                "📊 `/durum` - Aktif indirme ve sistem durumu\n"
+                "📋 `/kuyruk` - İndirme kuyruğunu görüntüle\n"
+                "❌ `/iptal <id>` - Kuyruktaki işlemi iptal et\n\n"
+                "**Otomatik Takipçi (Watchlist):**\n"
+                "🔔 `/takip <dizi>` - Diziyi otomatik yeni bölüm takibine al\n"
+                "🔕 `/takipbirak <dizi>` - Takip listesinden çıkar\n"
+                "📑 `/takiplistesi` - Takip edilen tüm diziler\n\n"
+                "**İstek Sistemi:**\n"
+                "✍️ `/istek <içerik adı>` - Yöneticilere dizi/film isteği ilet\n"
+            )
+            if message.from_user and message.from_user.id in config.admin_ids:
+                help_text += "\n👑 **Yönetici:** `/istekler` - Bekleyen istekleri listele"
+
+            await message.reply_text(help_text)
+
+        # 2. /ara <içerik>
+        @self.app.on_message(filters.command(["ara", "search"]))
+        async def cmd_search(client: Client, message: Message):
+            args = message.text.split(maxsplit=1)
+            if len(args) < 2:
+                await message.reply_text("⚠️ Lütfen aramak istediğiniz içerik adını yazın.\nÖrnek: `/ara Mezarlık`")
+                return
+
+            query = args[1].strip()
+            msg = await message.reply_text(f"🔍 **'{query}'** tüm DarkBox eklentilerinde aranıyor...")
+            
+            try:
+                results = await local_search(query)
+            except Exception as e:
+                await msg.edit_text(f"❌ Arama sırasında hata oluştu: {e}")
+                return
+
+            if not results:
+                await msg.edit_text(f"❌ **'{query}'** için hiçbir kaynak bulunamadı.")
+                return
+
+            SEARCH_CACHE[str(message.from_user.id)] = results
+            buttons = []
+            for idx, r in enumerate(results[:8]):
+                title = r.title if hasattr(r, "title") else str(r)
+                plugin = r.plugin_name if hasattr(r, "plugin_name") else "Kaynak"
+                buttons.append([InlineKeyboardButton(f"🎬 {title} [{plugin}]", callback_data=f"sel_res:{idx}")])
+
+            keyboard = InlineKeyboardMarkup(buttons)
+            await msg.edit_text(f"🎯 **'{query}'** için bulunan sonuçlar:\nİndirmek istediğiniz içeriği seçin:", reply_markup=keyboard)
+
+        # 3. /indir <dizi> <sezon> <bölüm>
+        @self.app.on_message(filters.command(["indir", "download"]))
+        async def cmd_download(client: Client, message: Message):
+            if message.from_user and message.from_user.id not in config.admin_ids:
+                await message.reply_text("⚠️ Bu komut sadece yöneticiler içindir. İçerik istemek için `/istek <isim>` kullanabilirsiniz.")
+                return
+
+            parts = message.text.split()
+            if len(parts) < 4:
+                await message.reply_text("⚠️ Hatalı format!\nKullanım: `/indir <Dizi Adı> <Sezon> <Bölüm>`\nÖrnek: `/indir Mezarlık 2 1`")
+                return
+
+            s_num = int(parts[-2])
+            e_num = int(parts[-1])
+            title = " ".join(parts[1:-2])
+
+            job_id = db.add_to_queue(title=title, season=s_num, episode=e_num, priority=3)
+            await message.reply_text(f"✅ **{title} S{s_num:02d}E{e_num:02d}** indirme kuyruğuna eklendi! (İşlem ID: `{job_id}`)")
+            asyncio.create_task(self.process_queue())
+
+        # 4. /durum
+        @self.app.on_message(filters.command(["durum", "status"]))
+        async def cmd_status(client: Client, message: Message):
+            active_jobs = db.get_active_queue()
+            if not active_jobs:
+                await message.reply_text("🟢 **Sistem Boşta.**\nAktif veya bekleyen indirme/yükleme işlemi yok.")
+                return
+
+            status_text = "📊 **Aktif İndirme & Kuyruk Durumu:**\n\n"
+            for j in active_jobs:
+                p_bar = "▓" * int(j["progress"] * 10) + "░" * (10 - int(j["progress"] * 10))
+                status_text += (
+                    f"🎬 **{j['title']} S{j['season']:02d}E{j['episode']:02d}**\n"
+                    f"• Durum: `{j['status'].upper()}`\n"
+                    f"• İlerleme: [{p_bar}] %{int(j['progress'] * 100)}\n"
+                    f"• İşlem ID: `{j['id']}`\n\n"
+                )
+            await message.reply_text(status_text)
+
+        # 5. /kuyruk
+        @self.app.on_message(filters.command(["kuyruk", "queue"]))
+        async def cmd_queue(client: Client, message: Message):
+            jobs = db.get_active_queue()
+            if not jobs:
+                await message.reply_text("📋 Kuyrukta bekleyen işlem yok.")
+                return
+
+            q_text = "📋 **İndirme Kuyruğu:**\n\n"
+            for j in jobs:
+                q_text += f"• `#{j['id']}` | **{j['title']}** (S{j['season']}E{j['episode']}) ➔ `{j['status']}`\n"
+            await message.reply_text(q_text)
+
+        # 6. /iptal <id>
+        @self.app.on_message(filters.command(["iptal", "cancel"]))
+        async def cmd_cancel(client: Client, message: Message):
+            if message.from_user and message.from_user.id not in config.admin_ids:
+                await message.reply_text("⚠️ Bu komut sadece yöneticiler içindir.")
+                return
+
+            parts = message.text.split()
+            if len(parts) < 2 or not parts[1].isdigit():
+                await message.reply_text("⚠️ Kullanım: `/iptal <işlem_id>`")
+                return
+
+            job_id = int(parts[1])
+            if db.cancel_queue_item(job_id):
+                await message.reply_text(f"🛑 İşlem `#{job_id}` iptal edildi.")
+            else:
+                await message.reply_text(f"❌ İşlem `#{job_id}` bulunamadı veya zaten tamamlanmış.")
+
+        # 7. Watchlist Komutları (/takip, /takiplistesi, /takipbirak)
+        @self.app.on_message(filters.command(["takip"]))
+        async def cmd_takip(client: Client, message: Message):
+            args = message.text.split(maxsplit=1)
+            if len(args) < 2:
+                await message.reply_text("⚠️ Kullanım: `/takip <Dizi Adı>`")
+                return
+            s_name = args[1].strip()
+            db.add_to_watchlist(s_name, message.from_user.id if message.from_user else 0)
+            await message.reply_text(f"🔔 **'{s_name}'** otomatik takip listesine eklendi! Yeni bölümler yayınlandığında otomatik yüklenecektir.")
+
+        @self.app.on_message(filters.command(["takiplistesi"]))
+        async def cmd_takiplistesi(client: Client, message: Message):
+            wl = db.get_watchlist()
+            if not wl:
+                await message.reply_text("📭 Takip listesinde henüz dizi yok.")
+                return
+            t_text = "🔔 **Otomatik Takip Edilen Diziler:**\n\n"
+            for row in wl:
+                t_text += f"• 🎬 **{row['series_name'].title()}**\n"
+            await message.reply_text(t_text)
+
+        @self.app.on_message(filters.command(["takipbirak"]))
+        async def cmd_takipbirak(client: Client, message: Message):
+            args = message.text.split(maxsplit=1)
+            if len(args) < 2:
+                await message.reply_text("⚠️ Kullanım: `/takipbirak <Dizi Adı>`")
+                return
+            s_name = args[1].strip()
+            if db.remove_from_watchlist(s_name):
+                await message.reply_text(f"🔕 **'{s_name}'** takip listesinden çıkarıldı.")
+            else:
+                await message.reply_text(f"❌ **'{s_name}'** takip listesinde bulunamadı.")
+
+        # 8. İstek Sistemi (/istek & /istekler)
+        @self.app.on_message(filters.command(["istek"]))
+        async def cmd_istek(client: Client, message: Message):
+            args = message.text.split(maxsplit=1)
+            if len(args) < 2:
+                await message.reply_text("⚠️ Lütfen istemek istediğiniz dizi veya film adını belirtin.\nÖrnek: `/istek Mezarlık 2. Sezon`")
+                return
+
+            query = args[1].strip()
+            u_id = message.from_user.id if message.from_user else 0
+            u_name = message.from_user.first_name if message.from_user else "Üye"
+            
+            req_id = db.create_request(user_id=u_id, user_name=u_name, query=query)
+            await message.reply_text(f"📩 İsteğiniz alındı! (İstek No: `#{req_id}`)\nYöneticiler onayladığında otomatik olarak konuya yüklenecektir.")
+
+            # Adminlere Bildirim Gönder
+            admin_btn = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("✅ Onayla & Yükle", callback_data=f"req_app:{req_id}"),
+                    InlineKeyboardButton("❌ Reddet", callback_data=f"req_rej:{req_id}")
+                ]
+            ])
+            admin_msg = (
+                f"📥 **Yeni İçerik İsteği Geldi!**\n\n"
+                f"👤 **İsteyen:** {u_name} (`{u_id}`)\n"
+                f"🎬 **İçerik:** `{query}`\n"
+                f"📌 **İstek No:** `#{req_id}`"
+            )
+            for a_id in config.admin_ids:
+                try:
+                    await self.app.send_message(chat_id=a_id, text=admin_msg, reply_markup=admin_btn)
+                except Exception as ex:
+                    logger.debug(f"Admin bildirim hatası ({a_id}): {ex}")
+
+        # Callback Handlers (Buton Tıklamaları)
+        @self.app.on_callback_query()
+        async def handle_callbacks(client: Client, query: CallbackQuery):
+            data = query.data
+            user_id = query.from_user.id
+
+            # 1. Arama Sonucu Seçimi -> Sezonları Getir
+            if data.startswith("sel_res:"):
+                idx = int(data.split(":")[1])
+                user_cache = SEARCH_CACHE.get(str(user_id), [])
+                if not user_cache or idx >= len(user_cache):
+                    await query.answer("⚠️ Arama sonucu süresi doldu, lütfen tekrar arayın.", show_alert=True)
+                    return
+
+                selected_item = user_cache[idx]
+                title = selected_item.title if hasattr(selected_item, "title") else str(selected_item)
+                plugin = selected_item.plugin_name if hasattr(selected_item, "plugin_name") else "Kaynak"
+                url = selected_item.url if hasattr(selected_item, "url") else ""
+
+                await query.answer("Detaylar yükleniyor...")
+                try:
+                    detail = await local_load_item(plugin, url)
+                    if hasattr(detail, "episodes") and detail.episodes:
+                        seasons = sorted(set(ep.season if hasattr(ep, "season") else (ep.get("season", 1) if isinstance(ep, dict) else 1) for ep in detail.episodes))
+                        s_buttons = []
+                        row = []
+                        for s in seasons:
+                            row.append(InlineKeyboardButton(f"{s}. Sezon", callback_data=f"sel_s:{idx}:{s}"))
+                            if len(row) == 3:
+                                s_buttons.append(row)
+                                row = []
+                        if row:
+                            s_buttons.append(row)
+
+                        await query.edit_message_text(
+                            f"🎬 **{title}**\nLütfen indirmek istediğiniz sezonu seçin:",
+                            reply_markup=InlineKeyboardMarkup(s_buttons)
+                        )
+                    else:
+                        # Film veya Tek Parça
+                        job_id = db.add_to_queue(title=title, season=1, episode=1, plugin_name=plugin, item_url=url, priority=3)
+                        await query.edit_message_text(f"✅ **{title}** indirme kuyruğuna eklendi! (İşlem ID: `{job_id}`)")
+                        asyncio.create_task(self.process_queue())
+                except Exception as e:
+                    await query.edit_message_text(f"❌ Detay yüklenemedi: {e}")
+
+            # 2. Sezon Seçimi -> Bölümleri Getir
+            elif data.startswith("sel_s:"):
+                _, idx_str, s_str = data.split(":")
+                idx, season = int(idx_str), int(s_str)
+                user_cache = SEARCH_CACHE.get(str(user_id), [])
+                if not user_cache or idx >= len(user_cache):
+                    await query.answer("⚠️ Süre aşımı.", show_alert=True)
+                    return
+
+                selected_item = user_cache[idx]
+                plugin = selected_item.plugin_name
+                url = selected_item.url
+                title = selected_item.title
+
+                detail = await local_load_item(plugin, url)
+                ep_buttons = []
+                row = []
+                for ep in detail.episodes:
+                    s_num = ep.season if hasattr(ep, "season") else (ep.get("season", 1) if isinstance(ep, dict) else 1)
+                    e_num = ep.episode if hasattr(ep, "episode") else (ep.get("episode", 1) if isinstance(ep, dict) else 1)
+                    if s_num == season:
+                        row.append(InlineKeyboardButton(f"{e_num}. Bölüm", callback_data=f"dl_ep:{idx}:{s_num}:{e_num}"))
+                        if len(row) == 4:
+                            ep_buttons.append(row)
+                            row = []
+                if row:
+                    ep_buttons.append(row)
+                ep_buttons.append([InlineKeyboardButton("📥 TÜM SEZONU İNDİR", callback_data=f"dl_all_s:{idx}:{season}")])
+
+                await query.edit_message_text(
+                    f"🎬 **{title}** - **{season}. Sezon**\nİndirmek istediğiniz bölümü seçin:",
+                    reply_markup=InlineKeyboardMarkup(ep_buttons)
+                )
+
+            # 3. Bölüm İndirme Tetikleme
+            elif data.startswith("dl_ep:"):
+                _, idx_str, s_str, e_str = data.split(":")
+                idx, s_num, e_num = int(idx_str), int(s_str), int(e_str)
+                user_cache = SEARCH_CACHE.get(str(user_id), [])
+                if not user_cache or idx >= len(user_cache):
+                    await query.answer("⚠️ Süre aşımı.", show_alert=True)
+                    return
+
+                title = user_cache[idx].title
+                job_id = db.add_to_queue(title=title, season=s_num, episode=e_num, priority=3)
+                await query.answer("✅ Kuyruğa eklendi!")
+                await query.edit_message_text(f"✅ **{title} S{s_num:02d}E{e_num:02d}** indirme kuyruğuna alındı! (İşlem ID: `{job_id}`)")
+                asyncio.create_task(self.process_queue())
+
+            # 4. Tüm Sezonu İndirme Tetikleme
+            elif data.startswith("dl_all_s:"):
+                _, idx_str, s_str = data.split(":")
+                idx, s_num = int(idx_str), int(s_str)
+                user_cache = SEARCH_CACHE.get(str(user_id), [])
+                if not user_cache or idx >= len(user_cache):
+                    await query.answer("⚠️ Süre aşımı.", show_alert=True)
+                    return
+
+                selected_item = user_cache[idx]
+                title = selected_item.title
+                detail = await local_load_item(selected_item.plugin_name, selected_item.url)
+
+                added = 0
+                for ep in detail.episodes:
+                    s = ep.season if hasattr(ep, "season") else (ep.get("season", 1) if isinstance(ep, dict) else 1)
+                    e = ep.episode if hasattr(ep, "episode") else (ep.get("episode", 1) if isinstance(ep, dict) else 1)
+                    if s == s_num:
+                        db.add_to_queue(title=title, season=s, episode=e, priority=2)
+                        added += 1
+
+                await query.answer(f"✅ {added} bölüm kuyruğa eklendi!")
+                await query.edit_message_text(f"✅ **{title} {s_num}. Sezonun** tüm bölümleri ({added} bölüm) kuyruğa alındı!")
+                asyncio.create_task(self.process_queue())
+
+            # 5. Admin İstek Onayı
+            elif data.startswith("req_app:"):
+                if user_id not in config.admin_ids:
+                    await query.answer("⚠️ Sadece yöneticiler onaylayabilir.", show_alert=True)
+                    return
+                req_id = int(data.split(":")[1])
+                req = db.get_request(req_id)
+                if not req:
+                    await query.answer("İstek bulunamadı.", show_alert=True)
+                    return
+
+                clean_title, s, e = Downloader.parse_title_season_episode(req["query"])
+                db.update_request_status(req_id, "approved", admin_id=user_id)
+                job_id = db.add_to_queue(title=clean_title, season=s, episode=e, priority=3)
+
+                await query.edit_message_text(f"✅ **İstek `#{req_id}` Onaylandı & Kuyruğa Alındı!** (İşlem ID: `{job_id}`)")
+                if req["user_id"]:
+                    try:
+                        await self.app.send_message(
+                            chat_id=req["user_id"],
+                            text=f"🎉 **Tebrikler!** '{req['query']}' isteğiniz yönetici tarafından onaylandı ve indirilmeye başlandı."
+                        )
+                    except Exception:
+                        pass
+                asyncio.create_task(self.process_queue())
+
+            # 6. Admin İstek Reddi
+            elif data.startswith("req_rej:"):
+                if user_id not in config.admin_ids:
+                    await query.answer("⚠️ Sadece yöneticiler reddedebilir.", show_alert=True)
+                    return
+                req_id = int(data.split(":")[1])
+                db.update_request_status(req_id, "rejected", admin_id=user_id)
+                await query.edit_message_text(f"❌ **İstek `#{req_id}` Reddedildi.**")
+
+    async def process_queue(self):
+        """Kuyruktaki işleri sırayla işler (tekil eşzamanlı kilit ile)."""
+        if self.is_processing_queue:
+            return
+
+        self.is_processing_queue = True
+        try:
+            while True:
+                job = db.get_next_queue_item()
+                if not job:
+                    break
+
+                job_id = job["id"]
+                title = job["title"]
+                season = job["season"]
+                episode = job["episode"]
+
+                clean_title, _, _ = Downloader.parse_title_season_episode(title)
+                logger.info(f"Kuyruk İşleniyor: #{job_id} | {clean_title} S{season:02d}E{episode:02d}")
+                db.update_queue_progress(job_id, "downloading", 0.0)
+
+                # 1. Konu ID'sini Bul / Aç
+                topic_id = await self.get_or_create_series_topic(clean_title)
+
+                # 2. Aday Akışları Bul (Fallback zinciri)
+                candidates = await Downloader.find_all_candidate_streams(clean_title, season, episode)
+                if not candidates:
+                    logger.warning(f"#{job_id} için akış kaynağı bulunamadı.")
+                    db.update_queue_progress(job_id, "failed", error_msg="Kaynak akış bulunamadı")
+                    continue
+
+                uploaded_ok = False
+                for cand in candidates:
+                    p_name = cand["plugin"]
+                    stream_url = cand["url"]
+                    logger.info(f"Denenen Kaynak: [{p_name}] -> {stream_url}")
+
+                    temp_file = TEMP_DIR / f"job_{job_id}_{clean_title}_S{season}E{episode}.mp4"
+                    
+                    def prog_cb(pct: float):
+                        db.update_queue_progress(job_id, "downloading", pct * 0.7)
+
+                    dl_success = await Downloader.download_hls_stream(stream_url, temp_file, progress_cb=prog_cb)
+                    if not dl_success or not temp_file.exists():
+                        logger.warning(f"[{p_name}] İndirme başarısız oldu, sonraki kaynağa geçiliyor...")
+                        continue
+
+                    # Boyut Kontrolü (< 1950 MB)
+                    f_size = temp_file.stat().st_size
+                    if f_size > config.max_file_size_bytes:
+                        logger.warning(f"[{p_name}] Dosya boyutu Telegram limitini aşıyor ({f_size / (1024*1024):.1f} MB), alternatif aranıyor...")
+                        temp_file.unlink(missing_ok=True)
+                        continue
+
+                    # Thumbnail Çıkart
+                    thumb_path = await Downloader.extract_thumbnail(temp_file)
+
+                    # Telegram'a Yükle
+                    db.update_queue_progress(job_id, "uploading", 0.75)
+                    logger.info(f"Telegram Konusuna Yükleniyor: '{clean_title} S{season:02d}E{episode:02d}' (Topic: {topic_id})")
+
+                    caption = (
+                        f"🎬 **{clean_title}**\n"
+                        f"📌 **{season}. Sezon {episode}. Bölüm**\n"
+                        f"📦 **Boyut:** {f_size / (1024*1024):.1f} MB\n"
+                        f"⚡ **Kaynak:** #{p_name}"
+                    )
+
+                    try:
+                        sent_msg = await self.app.send_video(
+                            chat_id=config.target_chat_id,
+                            video=str(temp_file),
+                            caption=caption,
+                            thumb=str(thumb_path) if thumb_path else None,
+                            supports_streaming=True,
+                            reply_to_message_id=topic_id if topic_id > 0 else None
+                        )
+                        msg_id = sent_msg.id if sent_msg else 0
+                        db.log_upload(p_name, cand.get("ep_url", ""), f"{clean_title} S{season:02d}E{episode:02d}", season, episode, "uploaded", msg_id, f_size)
+                        db.update_queue_progress(job_id, "completed", 1.0)
+                        uploaded_ok = True
+                        logger.info(f"✅ Başarıyla Yüklendi! Mesaj ID: {msg_id}")
+                        break
+                    except Exception as upload_err:
+                        logger.error(f"Telegram yükleme hatası: {upload_err}")
+                    finally:
+                        if temp_file.exists():
+                            temp_file.unlink(missing_ok=True)
+                        if thumb_path and thumb_path.exists():
+                            thumb_path.unlink(missing_ok=True)
+
+                if not uploaded_ok:
+                    db.update_queue_progress(job_id, "failed", error_msg="Tüm alternatif akışlar başarısız oldu")
+
+                await asyncio.sleep(2)
+        finally:
+            self.is_processing_queue = False
