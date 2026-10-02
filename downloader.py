@@ -211,8 +211,14 @@ class Downloader:
         if not results:
             return candidates
 
-        norm_target = db._norm_title(query_title)
-        matching_items = [item for item in results if norm_target in db._norm_title(item.get("title", ""))]
+        matching_items = [
+            item for item in results 
+            if cls.calculate_relevance(query_title, item.get("title", "")) >= 65.0
+        ]
+        matching_items.sort(
+            key=lambda x: cls.calculate_relevance(query_title, x.get("title", "")), 
+            reverse=True
+        )
 
         async def _process_item(item):
             p_name = item.get("plugin_name", "")

@@ -560,8 +560,12 @@ class DiziBotManager:
                     await query.answer("⚠️ Süre aşımı.", show_alert=True)
                     return
 
-                title = user_cache[idx].get("title", "")
-                job_id = db.add_to_queue(title=title, season=s_num, episode=e_num, priority=3)
+                selected_item = user_cache[idx]
+                title = selected_item.get("title", "")
+                plugin = selected_item.get("plugin_name", "")
+                url = selected_item.get("url", "")
+
+                job_id = db.add_to_queue(title=title, season=s_num, episode=e_num, plugin_name=plugin, item_url=url, priority=3)
                 await query.answer("✅ Kuyruğa eklendi!")
                 await query.edit_message_text(f"✅ **{title} S{s_num:02d}E{e_num:02d}** indirme kuyruğuna alındı! (İşlem ID: `{job_id}`)")
                 asyncio.create_task(self.process_queue())
@@ -577,7 +581,10 @@ class DiziBotManager:
 
                 selected_item = user_cache[idx]
                 title = selected_item.get("title", "")
-                detail = await local_load_item(selected_item.get("plugin_name", ""), selected_item.get("url", ""))
+                plugin = selected_item.get("plugin_name", "")
+                url = selected_item.get("url", "")
+
+                detail = await local_load_item(plugin, url)
                 episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
                 episodes.sort(key=lambda ep: (
                     ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1),
@@ -589,7 +596,7 @@ class DiziBotManager:
                     s = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
                     e = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
                     if s == s_num:
-                        db.add_to_queue(title=title, season=s, episode=e, priority=2)
+                        db.add_to_queue(title=title, season=s, episode=e, plugin_name=plugin, item_url=url, priority=2)
                         added += 1
 
                 await query.answer(f"✅ {added} bölüm kuyruğa eklendi!")
@@ -733,8 +740,53 @@ class DiziBotManager:
         # 1. Konu ID'sini Bul / Aç (Filmler tekil '🎬 Filmler' konusuna, Diziler kendi dizisi konusuna)
         topic_id = await self.get_or_create_series_topic(clean_title, is_movie=is_movie)
 
-        # 2. Aday Akışları Bul (Fallback zinciri)
-        candidates = await Downloader.find_all_candidate_streams(clean_title, season, episode)
+        # 2. Aday Akışları Bul (Önce seçilen plugin ve link, ardından fallback zinciri)
+        candidates = []
+        p_direct = job.get("plugin_name", "")
+        url_direct = job.get("item_url", "")
+        
+        if p_direct and url_direct:
+            try:
+                if is_movie:
+                    links = await asyncio.wait_for(local_load_links(p_direct, url_direct), timeout=8)
+                    for l in links:
+                        l_name = l.get("name", "Akış") if isinstance(l, dict) else getattr(l, "name", "Akış")
+                        l_url = l.get("url", "") if isinstance(l, dict) else getattr(l, "url", "")
+                        if l_url:
+                            candidates.append({
+                                "plugin": p_direct,
+                                "name": l_name,
+                                "url": l_url,
+                                "ep_url": url_direct,
+                                "title": title
+                            })
+                else:
+                    detail = await asyncio.wait_for(local_load_item(p_direct, url_direct), timeout=8)
+                    episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
+                    for ep in episodes:
+                        s_num = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
+                        e_num = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                        ep_url = ep.get("url", "") if isinstance(ep, dict) else getattr(ep, "url", "")
+                        if s_num == season and e_num == episode and ep_url:
+                            links = await asyncio.wait_for(local_load_links(p_direct, ep_url), timeout=8)
+                            for l in links:
+                                l_name = l.get("name", "Akış") if isinstance(l, dict) else getattr(l, "name", "Akış")
+                                l_url = l.get("url", "") if isinstance(l, dict) else getattr(l, "url", "")
+                                if l_url:
+                                    candidates.append({
+                                        "plugin": p_direct,
+                                        "name": l_name,
+                                        "url": l_url,
+                                        "ep_url": ep_url,
+                                        "title": ep.get("title", "")
+                                    })
+            except Exception as direct_err:
+                logger.debug(f"Doğrudan kaynak çözme hatası ({p_direct}): {direct_err}")
+
+        # Eğer doğrudan kaynaktan link bulunamadıysa fallback olarak tüm eklentileri ara
+        if not candidates:
+            candidates = await Downloader.find_all_candidate_streams(clean_title, season, episode)
+
         if not candidates:
             logger.warning(f"#{job_id} için akış kaynağı bulunamadı.")
             db.update_queue_progress(job_id, "failed", error_msg="Kaynak akış bulunamadı")
