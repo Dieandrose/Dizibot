@@ -324,6 +324,10 @@ class DiziBotManager:
                         item = results[0]
                         detail = await local_load_item(item.get("plugin_name", ""), item.get("url", ""))
                         episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
+                        episodes.sort(key=lambda ep: (
+                            ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1),
+                            ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                        ))
                         for ep in episodes:
                             s_num = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
                             e_num = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
@@ -513,6 +517,10 @@ class DiziBotManager:
                 title = selected_item.get("title", "")
                 detail = await local_load_item(selected_item.get("plugin_name", ""), selected_item.get("url", ""))
                 episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
+                episodes.sort(key=lambda ep: (
+                    ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1),
+                    ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                ))
 
                 added = 0
                 for ep in episodes:
@@ -707,6 +715,8 @@ class DiziBotManager:
             if target_season is not None and s != target_season:
                 continue
             all_candidate_eps.append((s, e))
+
+        all_candidate_eps.sort(key=lambda x: (x[0], x[1]))
 
         missing_eps = []
         queued_count = 0

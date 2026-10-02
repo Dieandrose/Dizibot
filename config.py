@@ -43,7 +43,7 @@ class Config:
         self.proxy: str = "http://127.0.0.1:4000"  # WARP / MASQUE Proxy
         self.check_interval_tracker: int = 900  # 15 dakika
         self.max_file_size_bytes: int = int(1950 * 1024 * 1024)  # 1.95 GB
-        self.max_concurrent_workers: int = 2  # Eşzamanlı paralel indirme işçisi
+        self.max_concurrent_workers: int = 1  # Sıralı ve hatasız yükleme için tekil işlem
         self.min_free_disk_gb: float = 3.0  # Minimum boş disk alanı
         self.plugins_priority: List[str] = [
             "Dizi65", "DizipalX", "RecTV", "Vizyona", "Hdizipal", 
