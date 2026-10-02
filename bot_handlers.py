@@ -10,6 +10,7 @@ import sys
 import time
 import asyncio
 import logging
+import sqlite3
 import httpx
 import shutil
 from pathlib import Path
@@ -221,20 +222,37 @@ class DiziBotManager:
                 q_text += f"• `#{j['id']}` | **{j['title']}** (S{j['season']}E{j['episode']}) ➔ `{j['status']}`\n"
             await message.reply_text(q_text)
 
-        # 6. /iptal <id>
-        @self.app.on_message(filters.command(["iptal", "cancel"]))
+        # 6. /iptal <id> veya /iptal hepsi
+        @self.app.on_message(filters.command(["iptal", "cancel", "kuyruktemizle"]))
         async def cmd_cancel(client: Client, message: Message):
             if message.from_user and message.from_user.id not in config.admin_ids:
                 await message.reply_text("⚠️ Bu komut sadece yöneticiler içindir.")
                 return
 
             parts = message.text.split()
-            if len(parts) < 2 or not parts[1].isdigit():
-                await message.reply_text("⚠️ Kullanım: `/iptal <işlem_id>`")
+            if len(parts) == 1 or (len(parts) >= 2 and parts[1].lower() in ["hepsi", "all", "tum", "tümü", "*"]):
+                with sqlite3.connect(db.db_path) as conn:
+                    cur = conn.cursor()
+                    cur.execute("DELETE FROM download_queue WHERE status != 'completed'")
+                    deleted = cur.rowcount
+                    conn.commit()
+                LIVE_TRANSFERS.clear()
+                for p in TEMP_DIR.glob("*"):
+                    try:
+                        if p.is_file():
+                            p.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                await message.reply_text(f"🛑 **Tüm aktif ve bekleyen indirmeler iptal edildi.** ({deleted} işlem kuyruktan silindi)")
+                return
+
+            if not parts[1].isdigit():
+                await message.reply_text("⚠️ Kullanım: `/iptal <işlem_id>` veya `/iptal hepsi`")
                 return
 
             job_id = int(parts[1])
             if db.cancel_queue_item(job_id):
+                LIVE_TRANSFERS.pop(job_id, None)
                 await message.reply_text(f"🛑 İşlem `#{job_id}` iptal edildi.")
             else:
                 await message.reply_text(f"❌ İşlem `#{job_id}` bulunamadı veya zaten tamamlanmış.")
