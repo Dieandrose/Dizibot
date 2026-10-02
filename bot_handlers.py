@@ -293,11 +293,60 @@ class DiziBotManager:
             query = args[1].strip()
             u_id = message.from_user.id if message.from_user else 0
             u_name = message.from_user.first_name if message.from_user else "Üye"
-            
+            u_username = (message.from_user.username or "").lower() if message.from_user else ""
+
+            # Sadece Dark / Yönetici kontrolü (ID veya Kullanıcı Adı)
+            is_dark_or_admin = (
+                u_id in config.admin_ids
+                or u_username in ["dark", "dieandrose"]
+                or "dark" in u_name.lower()
+            )
+
+            if is_dark_or_admin:
+                # Dark / Yönetici için ONAYSIZ DOĞRUDAN YÜKLEME
+                clean_title, s, e = Downloader.parse_title_season_episode(query)
+                req_id = db.create_request(user_id=u_id, user_name=u_name, query=query)
+                db.update_request_status(req_id, "approved", admin_id=u_id)
+
+                # Sezon tespiti kontrolü (örn: "2. Sezon" denmiş ama bölüm belirtilmemişse)
+                season_match = re.search(r"(\d+)\s*\.?\s*sezon", query, re.IGNORECASE)
+                has_explicit_ep = bool(re.search(r"(\d+)\s*\.?\s*bölüm|s\d+e\d+|e\d+", query, re.IGNORECASE))
+
+                if season_match and not has_explicit_ep:
+                    target_s = int(season_match.group(1))
+                    status_msg = await message.reply_text(f"⚡ **Dark İstek Algılandı:** '{clean_title} {target_s}. Sezon' taranıyor ve tüm bölümler onaysız kuyruğa alınıyor...")
+                    
+                    # Sezon bölümlerini bul
+                    results = await Downloader.search_all_plugins(clean_title)
+                    queued_count = 0
+                    if results:
+                        item = results[0]
+                        detail = await local_load_item(item.get("plugin_name", ""), item.get("url", ""))
+                        episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
+                        for ep in episodes:
+                            s_num = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
+                            e_num = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                            if s_num == target_s:
+                                db.add_to_queue(title=clean_title, season=s_num, episode=e_num, priority=3)
+                                queued_count += 1
+
+                    if queued_count > 0:
+                        await status_msg.edit_text(f"🚀 **Dark İsteği Başlatıldı:** {clean_title} {target_s}. Sezon ({queued_count} bölüm) onaysız olarak doğrudan kuyruğa alındı ve indirme başladı!")
+                    else:
+                        job_id = db.add_to_queue(title=clean_title, season=target_s, episode=1, priority=3)
+                        await status_msg.edit_text(f"🚀 **Dark İsteği Başlatıldı:** '{clean_title} S{target_s:02d}E01' kuyruğa alındı! (İşlem ID: `{job_id}`)")
+                else:
+                    job_id = db.add_to_queue(title=clean_title, season=s, episode=e, priority=3)
+                    await message.reply_text(f"🚀 **Dark İsteği Başlatıldı:** '{clean_title} S{s:02d}E{e:02d}' onaysız olarak doğrudan kuyruğa alındı ve indirme başladı! (İşlem ID: `{job_id}`)")
+
+                asyncio.create_task(self.process_queue())
+                return
+
+            # Normal Üyeler için Yönetici Onayı Akışı
             req_id = db.create_request(user_id=u_id, user_name=u_name, query=query)
             await message.reply_text(f"📩 İsteğiniz alındı! (İstek No: `#{req_id}`)\nYöneticiler onayladığında otomatik olarak konuya yüklenecektir.")
 
-            # Adminlere Bildirim Gönder
+            # Adminlere Onay Butonlu Bildirim Gönder
             admin_btn = InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton("✅ Onayla & Yükle", callback_data=f"req_app:{req_id}"),
