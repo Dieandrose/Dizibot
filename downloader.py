@@ -16,6 +16,7 @@ import asyncio
 import logging
 import sqlite3
 import shutil
+import difflib
 import urllib.parse
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple, Callable
@@ -81,8 +82,51 @@ class Downloader:
         return clean, s_num, e_num
 
     @classmethod
+    def calculate_relevance(cls, query: str, title: str) -> float:
+        """Arama sorgusu ile içerik başlığı arasındaki alaka skorunu (0-100) hesaplar."""
+        def _norm(s: str) -> str:
+            s = s.lower().strip()
+            tr_map = str.maketrans("çğıöşüâîû", "cgiosuaiu")
+            s = s.translate(tr_map)
+            s = re.sub(r"[^\w\s]", " ", s)
+            return " ".join(s.split())
+
+        q_clean = _norm(query)
+        t_clean = _norm(title)
+
+        if not q_clean or not t_clean:
+            return 0.0
+
+        if q_clean == t_clean:
+            return 100.0
+        if t_clean.startswith(q_clean):
+            return 95.0
+        if q_clean in t_clean:
+            ratio = len(q_clean) / len(t_clean)
+            return 80.0 + (ratio * 15.0)
+
+        q_words = set(q_clean.split())
+        t_words = set(t_clean.split())
+
+        if q_words.issubset(t_words):
+            return 85.0
+
+        common_words = q_words.intersection(t_words)
+        if common_words:
+            overlap_ratio = len(common_words) / len(q_words)
+            if overlap_ratio >= 0.5:
+                seq_ratio = difflib.SequenceMatcher(None, q_clean, t_clean).ratio()
+                return (overlap_ratio * 50.0) + (seq_ratio * 35.0)
+
+        seq_ratio = difflib.SequenceMatcher(None, q_clean, t_clean).ratio()
+        if seq_ratio >= 0.65:
+            return seq_ratio * 75.0
+
+        return 0.0
+
+    @classmethod
     async def search_all_plugins(cls, query: str) -> List[Dict[str, Any]]:
-        """DarkBox eklentilerinde paralel arama yapar ve tekilleştirilmiş liste döner."""
+        """DarkBox eklentilerinde paralel arama yapar ve akıllı alaka puanlamasıyla filtreler."""
         plugins = config.plugins_priority
         
         async def _search_plugin(p: str):
@@ -118,7 +162,19 @@ class Downloader:
                     key = (item["plugin_name"], item["url"])
                     if key not in seen:
                         seen.add(key)
-                        flat.append(item)
+                        score = cls.calculate_relevance(query, item["title"])
+                        if score >= 45.0:
+                            item["relevance_score"] = score
+                            flat.append(item)
+
+        # En yüksek alaka puanına ve eklenti önceliğine göre sırala
+        def sort_key(item):
+            score = item.get("relevance_score", 0.0)
+            p_name = item.get("plugin_name", "")
+            p_idx = config.plugins_priority.index(p_name) if p_name in config.plugins_priority else 99
+            return (score, -p_idx)
+
+        flat.sort(key=sort_key, reverse=True)
         return flat
 
     @classmethod
