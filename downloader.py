@@ -182,7 +182,7 @@ class Downloader:
         cls, 
         stream_url: str, 
         output_path: Path, 
-        progress_cb: Optional[Callable[[float], None]] = None
+        progress_cb: Optional[Callable[..., None]] = None
     ) -> bool:
         """HLS akışını video + Türkçe ses parçalarıyla tam senkronlu olarak indirir."""
         headers = {
@@ -289,8 +289,11 @@ class Downloader:
                                     res = await session.get(s_url, headers=headers)
                                     if res.status_code == 200:
                                         done += 1
-                                        if is_video and progress_cb and total > 0 and done % 15 == 0:
-                                            progress_cb(done / total)
+                                        if is_video and progress_cb and total > 0 and done % 10 == 0:
+                                            try:
+                                                progress_cb(done / total, done, total)
+                                            except TypeError:
+                                                progress_cb(done / total)
                                         return idx, res.content
                                 except Exception:
                                     await asyncio.sleep(1 + retry)
