@@ -326,29 +326,45 @@ class Downloader:
                             elif not audio_target_url:
                                 audio_target_url = u
 
-                # 2. 720p / 1080p (< 2GB) Video Akışı Tespiti
+                # 2. 720p / HD (< 2GB) Video Akışı Tespiti (Öncelikli 720p / Optimum Bitrate)
                 variants = []
                 for i, l in enumerate(lines):
                     if l.startswith("#EXT-X-STREAM-INF"):
                         bw_m = re.search(r"BANDWIDTH=(\d+)", l)
                         res_m = re.search(r"RESOLUTION=(\d+)x(\d+)", l)
+                        name_m = re.search(r'NAME=["\']?(\d+)[pP]?["\']?', l)
                         bw = int(bw_m.group(1)) if bw_m else 0
-                        h = int(res_m.group(2)) if res_m else 0
-                        if i + 1 < len(lines) and not lines[i + 1].startswith("#"):
-                            v_url = urllib.parse.urljoin(stream_url, lines[i + 1])
-                            variants.append((h, bw, v_url))
+                        h = int(res_m.group(2)) if res_m else (int(name_m.group(1)) if name_m else 0)
+                        
+                        # Bitrate'e göre yükseklik tahmini
+                        if h == 0:
+                            if 1000000 <= bw <= 2400000:
+                                h = 720
+                            elif bw > 2400000:
+                                h = 1080
+                            elif bw > 0:
+                                h = 480
+
+                        for next_idx in range(i + 1, min(i + 5, len(lines))):
+                            if not lines[next_idx].startswith("#"):
+                                v_url = urllib.parse.urljoin(stream_url, lines[next_idx])
+                                variants.append((h, bw, v_url))
+                                break
 
                 if variants:
-                    # 720p tercih et, yoksa 1080p veya en uygunu seç
+                    # 1. Tam 720p seç
                     pref_720 = [v for v in variants if v[0] == 720]
                     if pref_720:
+                        pref_720.sort(key=lambda x: x[1])
                         video_target_url = pref_720[0][2]
                     else:
-                        pref_under_1080 = [v for v in variants if v[0] <= 1080]
-                        if pref_under_1080:
-                            pref_under_1080.sort(key=lambda x: x[0], reverse=True)
-                            video_target_url = pref_under_1080[0][2]
+                        # 2. 480p - 720p arası HD seç
+                        under_720 = [v for v in variants if 480 <= v[0] < 720]
+                        if under_720:
+                            under_720.sort(key=lambda x: x[0], reverse=True)
+                            video_target_url = under_720[0][2]
                         else:
+                            # 3. Yalnızca 1080p varsa en düşük bitrate'lisini seç (2GB'ı aşmaması için)
                             variants.sort(key=lambda x: x[1])
                             video_target_url = variants[0][2]
 
