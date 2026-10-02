@@ -418,20 +418,40 @@ class DiziBotManager:
                     # İçeriğin Dizi mi Film mi olduğunu kontrol et
                     results = await Downloader.search_all_plugins(clean_title)
                     is_series_found = False
+                    item = None
+                    episodes = []
                     if results:
                         try:
                             item = results[0]
                             detail = await local_load_item(item.get("plugin_name", ""), item.get("url", ""))
                             episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
-                            if episodes and (len(episodes) > 1 or (episodes[0].get("episode", 0) if isinstance(episodes[0], dict) else getattr(episodes[0], "episode", 0)) > 1):
+                            if episodes and (len(episodes) > 1 or (episodes[0].get("episode", 0) if isinstance(episodes[0], dict) else getattr(episodes[0], "episode", 0)) > 1 or "/dizi/" in item.get("url", "")):
                                 is_series_found = True
                         except Exception:
                             pass
 
-                    # Eğer sezon/bölüm formatı girilmemişse ve dizi değilse Film olarak kuyruğa al
-                    if not has_explicit_ep and not is_series_found and s == 1 and e == 1:
-                        job_id = db.add_to_queue(title=clean_title, season=0, episode=0, priority=3)
-                        await message.reply_text(f"🚀 **Dark İsteği Başlatıldı:** '{clean_title}' (Film) onaysız olarak doğrudan kuyruğa alındı ve '🎬 Filmler' konusuna yükleniyor! (İşlem ID: `{job_id}`)")
+                    # Eğer spesifik sezon/bölüm girilmemişse
+                    if not has_explicit_ep and not season_match:
+                        if is_series_found and episodes:
+                            episodes.sort(key=lambda ep: (
+                                ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1),
+                                ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                            ))
+                            added = 0
+                            seasons_set = set()
+                            p_name = item.get("plugin_name", "") if item else ""
+                            i_url = item.get("url", "") if item else ""
+                            for ep in episodes:
+                                s_num = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
+                                e_num = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                                db.add_to_queue(title=clean_title, season=s_num, episode=e_num, plugin_name=p_name, item_url=i_url, priority=2)
+                                added += 1
+                                seasons_set.add(s_num)
+
+                            await message.reply_text(f"🚀 **Dark İsteği Başlatıldı:** '{clean_title}' dizisinin **TÜM SEZONLARI** ({len(seasons_set)} sezon, toplam {added} bölüm) onaysız olarak doğrudan kuyruğa alındı ve sırayla indirilip yükleniyor!")
+                        else:
+                            job_id = db.add_to_queue(title=clean_title, season=0, episode=0, priority=3)
+                            await message.reply_text(f"🚀 **Dark İsteği Başlatıldı:** '{clean_title}' (Film) onaysız olarak doğrudan kuyruğa alındı ve '🎬 Filmler' konusuna yükleniyor! (İşlem ID: `{job_id}`)")
                     else:
                         job_id = db.add_to_queue(title=clean_title, season=s, episode=e, priority=3)
                         await message.reply_text(f"🚀 **Dark İsteği Başlatıldı:** '{clean_title} S{s:02d}E{e:02d}' onaysız olarak doğrudan kuyruğa alındı ve indirme başladı! (İşlem ID: `{job_id}`)")
@@ -534,6 +554,8 @@ class DiziBotManager:
                     if is_series:
                         seasons = sorted(set(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1) for ep in episodes))
                         s_buttons = []
+                        # En üste TÜM SEZONLARI İNDİR butonu
+                        s_buttons.append([InlineKeyboardButton("🔥 TÜM SEZONLARI İNDİR (Tüm Bölümler)", callback_data=f"dl_all_series:{idx}")])
                         row = []
                         for s in seasons:
                             row.append(InlineKeyboardButton(f"{s}. Sezon", callback_data=f"sel_s:{idx}:{s}"))
@@ -544,7 +566,7 @@ class DiziBotManager:
                             s_buttons.append(row)
 
                         await query.edit_message_text(
-                            f"🎬 **{title}** (Dizi)\nLütfen indirmek istediğiniz sezonu seçin:",
+                            f"🎬 **{title}** (Dizi - {len(seasons)} Sezon, {len(episodes)} Bölüm)\nLütfen indirmek istediğiniz seçeneği belirleyin:",
                             reply_markup=InlineKeyboardMarkup(s_buttons)
                         )
                     else:
@@ -559,7 +581,40 @@ class DiziBotManager:
                 except Exception as e:
                     await query.edit_message_text(f"❌ Detay yüklenemedi: {e}")
 
-            # 1.1 Film İndirme Tetikleme
+            # 1.1 Tüm Sezonları İndirme Tetikleme
+            elif data.startswith("dl_all_series:"):
+                idx = int(data.split(":")[1])
+                user_cache = SEARCH_CACHE.get(str(user_id), [])
+                if not user_cache or idx >= len(user_cache):
+                    await query.answer("⚠️ Süre aşımı.", show_alert=True)
+                    return
+
+                selected_item = user_cache[idx]
+                title = selected_item.get("title", "")
+                plugin = selected_item.get("plugin_name", "")
+                url = selected_item.get("url", "")
+
+                detail = await local_load_item(plugin, url)
+                episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
+                episodes.sort(key=lambda ep: (
+                    ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1),
+                    ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                ))
+
+                added = 0
+                seasons_set = set()
+                for ep in episodes:
+                    s = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
+                    e = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                    db.add_to_queue(title=title, season=s, episode=e, plugin_name=plugin, item_url=url, priority=2)
+                    added += 1
+                    seasons_set.add(s)
+
+                await query.answer(f"✅ {added} bölüm kuyruğa eklendi!")
+                await query.edit_message_text(f"🚀 **{title}** dizisinin **tüm sezonları** ({len(seasons_set)} sezon, {added} bölüm) sırayla indirilip yüklenmek üzere kuyruğa alındı!")
+                asyncio.create_task(self.process_queue())
+
+            # 1.2 Film İndirme Tetikleme
             elif data.startswith("dl_movie:"):
                 idx = int(data.split(":")[1])
                 user_cache = SEARCH_CACHE.get(str(user_id), [])
