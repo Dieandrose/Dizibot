@@ -264,7 +264,12 @@ class Database:
                 "SELECT * FROM download_queue WHERE status = 'queued' ORDER BY priority DESC, created_at ASC LIMIT 1"
             )
             row = cur.fetchone()
-            return dict(row) if row else None
+            if row:
+                job_id = row["id"]
+                cur.execute("UPDATE download_queue SET status = 'claimed', updated_at = ? WHERE id = ?", (time.time(), job_id))
+                conn.commit()
+                return dict(row)
+            return None
 
     def update_queue_progress(self, job_id: int, status: str, progress: float = 0.0, error_msg: Optional[str] = None):
         with self._get_conn() as conn:

@@ -11,6 +11,7 @@ import time
 import asyncio
 import logging
 import httpx
+import shutil
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
@@ -19,7 +20,10 @@ from pyrogram.types import (
     Message, 
     InlineKeyboardMarkup, 
     InlineKeyboardButton, 
-    CallbackQuery
+    CallbackQuery,
+    InlineQuery,
+    InlineQueryResultArticle,
+    InputTextMessageContent
 )
 
 from config import config, TEMP_DIR
@@ -80,6 +84,46 @@ class DiziBotManager:
         return 0
 
     def _register_handlers(self):
+        # 0. Satır İçi Arama (Inline Query Handler)
+        @self.app.on_inline_query()
+        async def handle_inline(client: Client, inline_query: InlineQuery):
+            query = inline_query.query.strip()
+            if not query:
+                return
+
+            try:
+                results = await Downloader.search_all_plugins(query)
+                articles = []
+                for idx, item in enumerate(results[:15]):
+                    title = item.get("title", "İçerik")
+                    plugin = item.get("plugin_name", "Kaynak")
+                    url = item.get("url", "")
+                    poster = item.get("poster")
+                    desc = item.get("description") or f"{plugin} üzerinden izle / indir"
+
+                    thumb_url = poster if poster and poster.startswith("http") else None
+
+                    articles.append(
+                        InlineQueryResultArticle(
+                            id=f"in_{idx}_{plugin}_{abs(hash(url)) % 1000000}",
+                            title=f"🎬 {title} [{plugin}]",
+                            description=desc[:100],
+                            thumb_url=thumb_url,
+                            input_message_content=InputTextMessageContent(
+                                f"🎬 **{title}**\n"
+                                f"⚡ **Kaynak:** #{plugin}\n\n"
+                                f"🌐 **Daha Fazlası İçin :**  izle.darkbox.com.tr:9443"
+                            ),
+                            reply_markup=InlineKeyboardMarkup([
+                                [InlineKeyboardButton("🔍 Sezon & Bölümleri Listele", switch_inline_query_current_chat=title)],
+                                [InlineKeyboardButton("🌐 Daha Fazlası İçin", url="https://izle.darkbox.com.tr:9443")]
+                            ])
+                        )
+                    )
+                await inline_query.answer(articles, cache_time=30)
+            except Exception as e:
+                logger.error(f"Inline query hatası: {e}")
+
         # 1. /start ve /yardim
         @self.app.on_message(filters.command(["start", "yardim", "help"]))
         async def cmd_start(client: Client, message: Message):
@@ -430,100 +474,128 @@ class DiziBotManager:
                 db.update_request_status(req_id, "rejected", admin_id=user_id)
                 await query.edit_message_text(f"❌ **İstek `#{req_id}` Reddedildi.**")
 
+    def _check_disk_space(self):
+        try:
+            total, used, free = shutil.disk_usage(TEMP_DIR)
+            free_gb = free / (1024**3)
+            if free_gb < config.min_free_disk_gb:
+                logger.warning(f"Düşük disk alanı ({free_gb:.1f} GB), eski temp dosyaları temizleniyor...")
+                for f in TEMP_DIR.glob("*"):
+                    if f.is_file():
+                        try:
+                            f.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+        except Exception as e:
+            logger.error(f"Disk kontrol hatası: {e}")
+
+    async def _process_single_job(self, job: Dict[str, Any]):
+        job_id = job["id"]
+        title = job["title"]
+        season = job["season"]
+        episode = job["episode"]
+
+        clean_title, _, _ = Downloader.parse_title_season_episode(title)
+        logger.info(f"Kuyruk İşleniyor: #{job_id} | {clean_title} S{season:02d}E{episode:02d}")
+        db.update_queue_progress(job_id, "downloading", 0.0)
+        self._check_disk_space()
+
+        # 1. Konu ID'sini Bul / Aç
+        topic_id = await self.get_or_create_series_topic(clean_title)
+
+        # 2. Aday Akışları Bul (Fallback zinciri)
+        candidates = await Downloader.find_all_candidate_streams(clean_title, season, episode)
+        if not candidates:
+            logger.warning(f"#{job_id} için akış kaynağı bulunamadı.")
+            db.update_queue_progress(job_id, "failed", error_msg="Kaynak akış bulunamadı")
+            return
+
+        uploaded_ok = False
+        for cand in candidates:
+            p_name = cand["plugin"]
+            stream_url = cand["url"]
+            logger.info(f"Denenen Kaynak: [{p_name}] -> {stream_url}")
+
+            temp_file = TEMP_DIR / f"job_{job_id}_{clean_title}_S{season}E{episode}.mp4"
+            
+            def prog_cb(pct: float):
+                db.update_queue_progress(job_id, "downloading", pct * 0.7)
+
+            dl_success = await Downloader.download_hls_stream(stream_url, temp_file, progress_cb=prog_cb)
+            if not dl_success or not temp_file.exists():
+                logger.warning(f"[{p_name}] İndirme başarısız oldu, sonraki kaynağa geçiliyor...")
+                continue
+
+            # Boyut Kontrolü (< 1950 MB)
+            f_size = temp_file.stat().st_size
+            if f_size > config.max_file_size_bytes:
+                logger.warning(f"[{p_name}] Dosya boyutu Telegram limitini aşıyor ({f_size / (1024*1024):.1f} MB), alternatif aranıyor...")
+                temp_file.unlink(missing_ok=True)
+                continue
+
+            # Thumbnail Çıkart
+            thumb_path = await Downloader.extract_thumbnail(temp_file)
+
+            # Telegram'a Yükle
+            db.update_queue_progress(job_id, "uploading", 0.75)
+            logger.info(f"Telegram Konusuna Yükleniyor: '{clean_title} S{season:02d}E{episode:02d}' (Topic: {topic_id})")
+
+            caption = (
+                f"🎬 **{clean_title}**\n"
+                f"📌 **{season}. Sezon {episode}. Bölüm**\n"
+                f"📦 **Boyut:** {f_size / (1024*1024):.1f} MB\n\n"
+                f"🌐 **Daha Fazlası İçin :**  izle.darkbox.com.tr:9443"
+            )
+
+            try:
+                sent_msg = await self.app.send_video(
+                    chat_id=config.target_chat_id,
+                    video=str(temp_file),
+                    caption=caption,
+                    thumb=str(thumb_path) if thumb_path else None,
+                    supports_streaming=True,
+                    reply_to_message_id=topic_id if topic_id > 0 else None
+                )
+                msg_id = sent_msg.id if sent_msg else 0
+                db.log_upload(p_name, cand.get("ep_url", ""), f"{clean_title} S{season:02d}E{episode:02d}", season, episode, "uploaded", msg_id, f_size)
+                db.update_queue_progress(job_id, "completed", 1.0)
+                uploaded_ok = True
+                logger.info(f"✅ Başarıyla Yüklendi! Mesaj ID: {msg_id}")
+                break
+            except Exception as upload_err:
+                logger.error(f"Telegram yükleme hatası: {upload_err}")
+            finally:
+                if temp_file.exists():
+                    temp_file.unlink(missing_ok=True)
+                if thumb_path and thumb_path.exists():
+                    thumb_path.unlink(missing_ok=True)
+
+        if not uploaded_ok:
+            db.update_queue_progress(job_id, "failed", error_msg="Tüm alternatif akışlar başarısız oldu")
+
     async def process_queue(self):
-        """Kuyruktaki işleri sırayla işler (tekil eşzamanlı kilit ile)."""
+        """Kuyruktaki işleri çoklu eşzamanlı işçi havuzuyla (multi-worker) işler."""
         if self.is_processing_queue:
             return
 
         self.is_processing_queue = True
-        try:
+        sem = asyncio.Semaphore(config.max_concurrent_workers)
+
+        async def _worker():
             while True:
-                job = db.get_next_queue_item()
-                if not job:
-                    break
-
-                job_id = job["id"]
-                title = job["title"]
-                season = job["season"]
-                episode = job["episode"]
-
-                clean_title, _, _ = Downloader.parse_title_season_episode(title)
-                logger.info(f"Kuyruk İşleniyor: #{job_id} | {clean_title} S{season:02d}E{episode:02d}")
-                db.update_queue_progress(job_id, "downloading", 0.0)
-
-                # 1. Konu ID'sini Bul / Aç
-                topic_id = await self.get_or_create_series_topic(clean_title)
-
-                # 2. Aday Akışları Bul (Fallback zinciri)
-                candidates = await Downloader.find_all_candidate_streams(clean_title, season, episode)
-                if not candidates:
-                    logger.warning(f"#{job_id} için akış kaynağı bulunamadı.")
-                    db.update_queue_progress(job_id, "failed", error_msg="Kaynak akış bulunamadı")
-                    continue
-
-                uploaded_ok = False
-                for cand in candidates:
-                    p_name = cand["plugin"]
-                    stream_url = cand["url"]
-                    logger.info(f"Denenen Kaynak: [{p_name}] -> {stream_url}")
-
-                    temp_file = TEMP_DIR / f"job_{job_id}_{clean_title}_S{season}E{episode}.mp4"
-                    
-                    def prog_cb(pct: float):
-                        db.update_queue_progress(job_id, "downloading", pct * 0.7)
-
-                    dl_success = await Downloader.download_hls_stream(stream_url, temp_file, progress_cb=prog_cb)
-                    if not dl_success or not temp_file.exists():
-                        logger.warning(f"[{p_name}] İndirme başarısız oldu, sonraki kaynağa geçiliyor...")
-                        continue
-
-                    # Boyut Kontrolü (< 1950 MB)
-                    f_size = temp_file.stat().st_size
-                    if f_size > config.max_file_size_bytes:
-                        logger.warning(f"[{p_name}] Dosya boyutu Telegram limitini aşıyor ({f_size / (1024*1024):.1f} MB), alternatif aranıyor...")
-                        temp_file.unlink(missing_ok=True)
-                        continue
-
-                    # Thumbnail Çıkart
-                    thumb_path = await Downloader.extract_thumbnail(temp_file)
-
-                    # Telegram'a Yükle
-                    db.update_queue_progress(job_id, "uploading", 0.75)
-                    logger.info(f"Telegram Konusuna Yükleniyor: '{clean_title} S{season:02d}E{episode:02d}' (Topic: {topic_id})")
-
-                    caption = (
-                        f"🎬 **{clean_title}**\n"
-                        f"📌 **{season}. Sezon {episode}. Bölüm**\n"
-                        f"📦 **Boyut:** {f_size / (1024*1024):.1f} MB\n"
-                        f"⚡ **Kaynak:** #{p_name}"
-                    )
-
-                    try:
-                        sent_msg = await self.app.send_video(
-                            chat_id=config.target_chat_id,
-                            video=str(temp_file),
-                            caption=caption,
-                            thumb=str(thumb_path) if thumb_path else None,
-                            supports_streaming=True,
-                            reply_to_message_id=topic_id if topic_id > 0 else None
-                        )
-                        msg_id = sent_msg.id if sent_msg else 0
-                        db.log_upload(p_name, cand.get("ep_url", ""), f"{clean_title} S{season:02d}E{episode:02d}", season, episode, "uploaded", msg_id, f_size)
-                        db.update_queue_progress(job_id, "completed", 1.0)
-                        uploaded_ok = True
-                        logger.info(f"✅ Başarıyla Yüklendi! Mesaj ID: {msg_id}")
+                job = None
+                async with sem:
+                    job = db.get_next_queue_item()
+                    if not job:
                         break
-                    except Exception as upload_err:
-                        logger.error(f"Telegram yükleme hatası: {upload_err}")
-                    finally:
-                        if temp_file.exists():
-                            temp_file.unlink(missing_ok=True)
-                        if thumb_path and thumb_path.exists():
-                            thumb_path.unlink(missing_ok=True)
+                    try:
+                        await self._process_single_job(job)
+                    except Exception as e:
+                        logger.error(f"İşleme hatası (Job {job.get('id')}): {e}")
+                await asyncio.sleep(1)
 
-                if not uploaded_ok:
-                    db.update_queue_progress(job_id, "failed", error_msg="Tüm alternatif akışlar başarısız oldu")
-
-                await asyncio.sleep(2)
+        try:
+            workers = [_worker() for _ in range(config.max_concurrent_workers)]
+            await asyncio.gather(*workers)
         finally:
             self.is_processing_queue = False
