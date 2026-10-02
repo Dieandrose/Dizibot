@@ -87,7 +87,7 @@ class Downloader:
         
         async def _search_plugin(p: str):
             try:
-                res = await local_search(p, query)
+                res = await asyncio.wait_for(local_search(p, query), timeout=4.0)
                 out = []
                 for item in res:
                     title = item.get("title") if isinstance(item, dict) else (item.title if hasattr(item, "title") else str(item))
@@ -130,20 +130,16 @@ class Downloader:
             return candidates
 
         norm_target = db._norm_title(query_title)
+        matching_items = [item for item in results if norm_target in db._norm_title(item.get("title", ""))]
 
-        for item in results:
-            item_title = item.get("title", "")
-            plugin_name = item.get("plugin_name", "")
-            item_url = item.get("url", "")
-
-            if norm_target not in db._norm_title(item_title):
-                continue
-
+        async def _process_item(item):
+            p_name = item.get("plugin_name", "")
+            i_url = item.get("url", "")
+            cand_list = []
             try:
-                detail = await local_load_item(plugin_name, item_url)
+                detail = await asyncio.wait_for(local_load_item(p_name, i_url), timeout=8)
                 if not detail:
-                    continue
-
+                    return []
                 episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
                 for ep in episodes:
                     s_num = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
@@ -152,20 +148,27 @@ class Downloader:
                     ep_title = ep.get("title", "") if isinstance(ep, dict) else getattr(ep, "title", "")
 
                     if s_num == target_s and e_num == target_e and ep_url:
-                        links = await local_load_links(plugin_name, ep_url)
+                        links = await asyncio.wait_for(local_load_links(p_name, ep_url), timeout=8)
                         for l in links:
                             link_name = l.get("name", "Akış") if isinstance(l, dict) else getattr(l, "name", "Akış")
                             link_url = l.get("url", "") if isinstance(l, dict) else getattr(l, "url", "")
                             if link_url:
-                                candidates.append({
-                                    "plugin": plugin_name,
+                                cand_list.append({
+                                    "plugin": p_name,
                                     "name": link_name,
                                     "url": link_url,
                                     "ep_url": ep_url,
                                     "title": ep_title
                                 })
             except Exception as ex:
-                logger.debug(f"{plugin_name} link çözümleme atlandı: {ex}")
+                logger.debug(f"{p_name} link çözümleme atlandı: {ex}")
+            return cand_list
+
+        item_tasks = [_process_item(item) for item in matching_items]
+        gathered = await asyncio.gather(*item_tasks, return_exceptions=True)
+        for r in gathered:
+            if isinstance(r, list):
+                candidates.extend(r)
 
         # Eklenti önceliğine göre sırala
         def plugin_priority_key(c):
@@ -185,10 +188,25 @@ class Downloader:
         progress_cb: Optional[Callable[..., None]] = None
     ) -> bool:
         """HLS akışını video + Türkçe ses parçalarıyla tam senkronlu olarak indirir."""
+        referer_url = stream_url
+        if stream_url.startswith("/proxy/video") or "proxy/video?url=" in stream_url:
+            parsed_proxy = urllib.parse.urlparse(stream_url)
+            qs = urllib.parse.parse_qs(parsed_proxy.query)
+            if "url" in qs and qs["url"]:
+                real_target = qs["url"][0]
+                referer_url = qs.get("referer", [real_target])[0]
+                stream_url = real_target
+            elif stream_url.startswith("/"):
+                stream_url = f"http://127.0.0.1:3311{stream_url}"
+
+        parsed_ref = urllib.parse.urlparse(referer_url)
+        origin_header = f"{parsed_ref.scheme}://{parsed_ref.netloc}" if parsed_ref.netloc else ""
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Referer": stream_url
+            "Referer": referer_url
         }
+        if origin_header:
+            headers["Origin"] = origin_header
 
         async with AsyncSession(impersonate="chrome124", proxy=config.proxy, timeout=60) as session:
             try:
@@ -276,35 +294,41 @@ class Downloader:
             tmp_audio_file = output_path.with_suffix(".araw.ts") if audio_segs else None
 
             async def download_seg_list(seg_list: List[str], dest_file: Path, is_video: bool = True):
+                total = len(seg_list)
+                if total == 0:
+                    return
+
+                batch_size = 35
+                sem = asyncio.Semaphore(16)
+                done = 0
+
+                async def fetch_seg(idx: int, s_url: str):
+                    nonlocal done
+                    async with sem:
+                        for retry in range(4):
+                            try:
+                                res = await session.get(s_url, headers=headers)
+                                if res.status_code == 200:
+                                    done += 1
+                                    if is_video and progress_cb and total > 0 and done % 10 == 0:
+                                        try:
+                                            progress_cb(done / total, done, total)
+                                        except TypeError:
+                                            progress_cb(done / total)
+                                    return idx, res.content
+                            except Exception:
+                                await asyncio.sleep(1 + retry)
+                        return idx, b""
+
                 with open(dest_file, "wb") as f_out:
-                    sem = asyncio.Semaphore(12)
-                    total = len(seg_list)
-                    done = 0
-
-                    async def fetch_seg(idx: int, s_url: str):
-                        nonlocal done
-                        async with sem:
-                            for retry in range(4):
-                                try:
-                                    res = await session.get(s_url, headers=headers)
-                                    if res.status_code == 200:
-                                        done += 1
-                                        if is_video and progress_cb and total > 0 and done % 10 == 0:
-                                            try:
-                                                progress_cb(done / total, done, total)
-                                            except TypeError:
-                                                progress_cb(done / total)
-                                        return idx, res.content
-                                except Exception:
-                                    await asyncio.sleep(1 + retry)
-                            return idx, b""
-
-                    tasks = [fetch_seg(i, u) for i, u in enumerate(seg_list)]
-                    results = await asyncio.gather(*tasks)
-                    results.sort(key=lambda x: x[0])
-                    for _, chunk in results:
-                        if chunk:
-                            f_out.write(chunk)
+                    for b_start in range(0, total, batch_size):
+                        b_end = min(total, b_start + batch_size)
+                        tasks = [fetch_seg(i, seg_list[i]) for i in range(b_start, b_end)]
+                        batch_results = await asyncio.gather(*tasks)
+                        batch_results.sort(key=lambda x: x[0])
+                        for _, chunk in batch_results:
+                            if chunk:
+                                f_out.write(chunk)
 
             logger.info(f"HLS İndiriliyor: Video={len(video_segs)} parça, Ses={len(audio_segs)} parça...")
             await download_seg_list(video_segs, tmp_video_file, is_video=True)

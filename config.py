@@ -46,9 +46,8 @@ class Config:
         self.max_concurrent_workers: int = 1  # Sıralı ve hatasız yükleme için tekil işlem
         self.min_free_disk_gb: float = 3.0  # Minimum boş disk alanı
         self.plugins_priority: List[str] = [
-            "Dizi65", "DizipalX", "RecTV", "Vizyona", "Hdizipal", 
-            "SineWix", "Dizimom", "FilmIzleCH", "FullHDFilmizlesene", 
-            "FilmMakinesi", "HDFilmCehennemi", "JetFilmIzle", "Medya"
+            "Dizi65", "DizipalX", "RecTV", "Vizyona", "SineWix", 
+            "FullHDFilmizlesene", "JetFilmIzle", "Hdizipal", "FilmMakinesi"
         ]
         self.load()
 
