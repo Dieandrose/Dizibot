@@ -501,33 +501,35 @@ class Downloader:
                 except Exception:
                     pass
 
-            cmd = ["ffmpeg", "-y", "-i", str(tmp_video_file)]
+            # FFmpeg ile Senkron Birleştirme (Frame-Accurate Muxing & Timestamp Alignment)
+            cmd = [
+                "ffmpeg", "-y",
+                "-fflags", "+genpts+discardcorrupt",
+                "-i", str(tmp_video_file)
+            ]
             if tmp_audio_file and tmp_audio_file.exists() and tmp_audio_file.stat().st_size > 0:
-                cmd.extend(["-i", str(tmp_audio_file)])
-                if is_audio_aac:
-                    cmd.extend([
-                        "-c:v", "copy",
-                        "-c:a", "copy",
-                        "-bsf:a", "aac_adtstoasc",
-                        "-shortest",
-                        "-movflags", "+faststart",
-                        str(output_path)
-                    ])
-                else:
-                    cmd.extend([
-                        "-c:v", "copy",
-                        "-c:a", "aac",
-                        "-b:a", "192k",
-                        "-af", "aresample=async=1000:first_pts=0",
-                        "-shortest",
-                        "-movflags", "+faststart",
-                        str(output_path)
-                    ])
+                cmd.extend([
+                    "-i", str(tmp_audio_file),
+                    "-map", "0:v:0",
+                    "-map", "1:a:0",
+                    "-c:v", "copy",
+                    "-c:a", "aac",
+                    "-b:a", "192k",
+                    "-af", "aresample=async=1000:first_pts=0",
+                    "-avoid_negative_ts", "make_zero",
+                    "-shortest",
+                    "-movflags", "+faststart",
+                    str(output_path)
+                ])
             else:
                 cmd.extend([
+                    "-map", "0:v:0",
+                    "-map", "0:a:0?",
                     "-c:v", "copy",
-                    "-c:a", "copy",
-                    "-bsf:a", "aac_adtstoasc",
+                    "-c:a", "aac",
+                    "-b:a", "192k",
+                    "-af", "aresample=async=1000:first_pts=0",
+                    "-avoid_negative_ts", "make_zero",
                     "-movflags", "+faststart",
                     str(output_path)
                 ])
