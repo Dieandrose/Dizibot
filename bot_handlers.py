@@ -296,7 +296,69 @@ class DiziBotManager:
             else:
                 await message.reply_text(f"❌ **'{s_name}'** takip listesinde bulunamadı.")
 
-        # 8. İstek Sistemi (/istek & /istekler)
+        # 8. Forum Konu Yönetimi (/konubagla, /konu, /konular)
+        @self.app.on_message(filters.command(["konubagla", "konu", "settopic"]))
+        async def cmd_set_topic(client: Client, message: Message):
+            if message.from_user and message.from_user.id not in config.admin_ids:
+                await message.reply_text("⚠️ Bu komut sadece yöneticiler içindir.")
+                return
+
+            parts = message.text.split(maxsplit=2)
+            current_thread_id = getattr(message, "message_thread_id", None) or getattr(message, "reply_to_top_message_id", None)
+
+            if len(parts) == 1 and current_thread_id:
+                await message.reply_text(f"📌 Bu konunun ID'si: `{current_thread_id}`\nBir diziye bağlamak için konu içinde: `/konubagla <Dizi Adı>` yazabilirsiniz.")
+                return
+
+            if len(parts) == 2:
+                dizi_name = parts[1]
+                if current_thread_id:
+                    tid = current_thread_id
+                else:
+                    await message.reply_text("⚠️ Kullanım: `/konubagla <Dizi Adı> <Konu_ID>` veya konunun içindeyken `/konubagla <Dizi Adı>`")
+                    return
+            elif len(parts) >= 3:
+                dizi_name = parts[1]
+                try:
+                    tid = int(parts[2])
+                except ValueError:
+                    await message.reply_text("⚠️ Konu ID sayı olmalıdır. Örnek: `/konubagla Tuzlu Kahve 4823`")
+                    return
+            else:
+                await message.reply_text("⚠️ Kullanım: `/konubagla <Dizi Adı> <Konu_ID>`")
+                return
+
+            clean_name, _, _ = Downloader.parse_title_season_episode(dizi_name)
+            db.save_topic(clean_name, tid)
+            await message.reply_text(f"✅ **'{clean_name}'** içeriği başarıyla Konu ID `#{tid}` ile eşleştirildi!")
+
+        @self.app.on_message(filters.command(["konular", "topics"]))
+        async def cmd_list_topics(client: Client, message: Message):
+            with db._get_conn() as conn:
+                cur = conn.cursor()
+                rows = cur.execute("SELECT series_title, topic_id FROM topics ORDER BY id ASC").fetchall()
+
+            if not rows:
+                await message.reply_text("📭 Kayıtlı forum konusu bulunamadı.")
+                return
+
+            lines = ["📋 **Kayıtlı Forum Konuları:**\n"]
+            for r in rows:
+                lines.append(f"• 🎬 **{r['series_title'].title()}** ➔ Konu ID: `{r['topic_id']}`")
+
+            await message.reply_text("\n".join(lines))
+
+        # 8.1 Forum Konusu Oluşturulduğunda / Düzenlendiğinde Otomatik Yakalama
+        @self.app.on_message(filters.chat(config.target_chat_id) & filters.service)
+        async def on_topic_action(client: Client, message: Message):
+            topic_info = getattr(message, "forum_topic_created", None) or getattr(message, "forum_topic_edited", None)
+            if topic_info and getattr(topic_info, "name", None):
+                t_name = topic_info.name
+                t_id = message.id
+                db.save_topic(t_name, t_id)
+                logger.info(f"📌 Telegram Konusu Otomatik Yakalandı & Kaydedildi: '{t_name}' -> Topic ID: {t_id}")
+
+        # 9. İstek Sistemi (/istek & /istekler)
         @self.app.on_message(filters.command(["istek"]))
         async def cmd_istek(client: Client, message: Message):
             args = message.text.split(maxsplit=1)

@@ -105,24 +105,39 @@ class Database:
     @staticmethod
     def _norm_title(t: str) -> str:
         s = t.lower().strip()
+        # Emojileri ve özel sembolleri temizle
         s = s.replace("ı", "i").replace("ğ", "g").replace("ü", "u").replace("ş", "s").replace("ö", "o").replace("ç", "c")
-        s = re.sub(r"[\W_]+", " ", s).strip()
+        s = re.sub(r"[^\w\s]", " ", s, flags=re.UNICODE)
+        s = re.sub(r"\s+", " ", s).strip()
         return s
 
     # --- Topic Yönetimi ---
     def get_topic_id(self, series_title: str) -> Optional[int]:
         norm = self._norm_title(series_title)
+        if not norm:
+            return None
         with self._get_conn() as conn:
             cur = conn.cursor()
-            cur.execute(
-                "SELECT topic_id, series_title FROM topics WHERE series_title = ? OR ? LIKE '%' || series_title || '%' OR series_title LIKE '%' || ? || '%'",
-                (norm, norm, norm)
-            )
+            # 1. Birebir normalize eşleşme
+            cur.execute("SELECT topic_id FROM topics WHERE series_title = ?", (norm,))
             row = cur.fetchone()
-            return row["topic_id"] if row else None
+            if row:
+                return row["topic_id"]
+
+            # 2. Esnek içerik eşleşmesi
+            cur.execute("SELECT topic_id, series_title FROM topics")
+            all_topics = cur.fetchall()
+            for r in all_topics:
+                t_norm = r["series_title"]
+                if t_norm == norm or (len(norm) >= 4 and norm in t_norm) or (len(t_norm) >= 4 and t_norm in norm):
+                    return r["topic_id"]
+
+            return None
 
     def save_topic(self, series_title: str, topic_id: int):
         norm = self._norm_title(series_title)
+        if not norm or topic_id <= 0:
+            return
         with self._get_conn() as conn:
             cur = conn.cursor()
             cur.execute(
