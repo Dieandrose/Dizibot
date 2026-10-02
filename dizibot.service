@@ -1,0 +1,16 @@
+[Unit]
+Description=DarkBox Telegram MTProto Video Uploader Service
+After=network.target darkbox.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/Darkbox
+ExecStart=/root/Darkbox/.venv/bin/python /root/Darkbox/tools/tg_uploader_bot.py
+Restart=always
+RestartSec=15
+StandardOutput=append:/root/Darkbox/data/tg_uploader.log
+StandardError=append:/root/Darkbox/data/tg_uploader.log
+
+[Install]
+WantedBy=multi-user.target
