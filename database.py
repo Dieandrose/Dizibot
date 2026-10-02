@@ -141,22 +141,34 @@ class Database:
             )
             return cur.fetchone() is not None
 
+    def get_uploaded_episodes_for_series(self, title: str) -> set:
+        norm = self._norm_title(title)
+        uploaded = set()
+        with self._get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT title, season, episode FROM uploads WHERE status = 'uploaded'")
+            rows = cur.fetchall()
+            for r in rows:
+                if norm in self._norm_title(r["title"]):
+                    uploaded.add((int(r["season"]), int(r["episode"])))
+        return uploaded
+
     def is_title_ep_uploaded(self, title: str, season: int, episode: int) -> bool:
+        return (int(season), int(episode)) in self.get_uploaded_episodes_for_series(title)
+
+    def is_job_in_queue(self, title: str, season: int, episode: int) -> bool:
         norm = self._norm_title(title)
         with self._get_conn() as conn:
             cur = conn.cursor()
             cur.execute(
-                "SELECT id FROM uploads WHERE season = ? AND episode = ? AND status = 'uploaded'",
+                "SELECT id, title FROM download_queue WHERE season = ? AND episode = ? AND status IN ('queued', 'claimed', 'downloading', 'uploading')",
                 (season, episode)
             )
             rows = cur.fetchall()
             for r in rows:
-                cur2 = conn.cursor()
-                cur2.execute("SELECT title FROM uploads WHERE id = ?", (r["id"],))
-                t_row = cur2.fetchone()
-                if t_row and norm in self._norm_title(t_row["title"]):
+                if norm in self._norm_title(r["title"]):
                     return True
-            return False
+        return False
 
     def log_upload(self, plugin: str, item_url: str, title: str, season: int, episode: int, status: str, tg_msg_id: int = 0, file_size: int = 0):
         with self._get_conn() as conn:

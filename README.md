@@ -27,6 +27,14 @@ DarkBox eklenti ekosistemindeki kaynakları (Dizi65, DizipalX, RecTV, Vizyona vb
 - **Admin Onay Butonları:** Yöneticilere `[✅ Onayla & Yükle]` ve `[❌ Reddet]` butonlu bildirim düşer.
 - **Otomasyon:** Yönetici onayladığı an içerik kuyruğa alınır, indirilir ve yüklendiğinde istek sahibine bildirim gider.
 
+### 5. 🛡️ Bütünlük Denetimi & Eksik Bölüm Tamamlama (Auto-Healer)
+- **Otomatik Yükleme Kontrolü:** Her bölüm yüklendikten sonra dizinin ilgili sezonundaki tüm bölümler denetlenir; arada atlanmış, yüklenmemiş veya başarısız olmuş eksik bölüm tespit edilirse otomatik kuyruğa alınıp indirilir.
+- **Manuel Denetim Komutu (`/kontrol <dizi>`):** Tek komutla dizinin eklentideki tüm bölümleriyle gruptaki bölümlerini karşılaştırır ve eksikleri anında tamamlar.
+
+### 6. ⚡ Eşzamanlı Çoklu İndirme & Satır İçi Arama
+- **Multi-Worker Pool:** Aynı anda birden fazla bölüm paralel indirilerek aktarım hızı artırılır.
+- **Satır İçi Arama (Inline Query):** Herhangi bir sohbette `@diyzybot <dizi>` yazılarak anında kartlı arama yapılır.
+
 ---
 
 ## 🛠️ Kurulum & Yapılandırma

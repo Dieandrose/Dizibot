@@ -135,10 +135,11 @@ class DiziBotManager:
                 "📊 `/durum` - Aktif indirme ve sistem durumu\n"
                 "📋 `/kuyruk` - İndirme kuyruğunu görüntüle\n"
                 "❌ `/iptal <id>` - Kuyruktaki işlemi iptal et\n\n"
-                "**Otomatik Takipçi (Watchlist):**\n"
+                "**Otomatik Takipçi & Denetim:**\n"
                 "🔔 `/takip <dizi>` - Diziyi otomatik yeni bölüm takibine al\n"
                 "🔕 `/takipbirak <dizi>` - Takip listesinden çıkar\n"
-                "📑 `/takiplistesi` - Takip edilen tüm diziler\n\n"
+                "📑 `/takiplistesi` - Takip edilen tüm diziler\n"
+                "🛡️ `/kontrol <dizi>` - Eksik bölümleri tara ve otomatik tamamla\n\n"
                 "**İstek Sistemi:**\n"
                 "✍️ `/istek <içerik adı>` - Yöneticilere dizi/film isteği ilet\n"
             )
@@ -364,6 +365,43 @@ class DiziBotManager:
                     await self.app.send_message(chat_id=a_id, text=admin_msg, reply_markup=admin_btn)
                 except Exception as ex:
                     logger.debug(f"Admin bildirim hatası ({a_id}): {ex}")
+
+        # 9. Eksik Bölüm Kontrolü & Otomatik Tamamlama (/kontrol & /dogrula)
+        @self.app.on_message(filters.command(["kontrol", "dogrula", "check"]))
+        async def cmd_check(client: Client, message: Message):
+            args = message.text.split(maxsplit=1)
+            if len(args) < 2:
+                await message.reply_text("⚠️ Kullanım: `/kontrol <Dizi Adı>` veya `/kontrol <Dizi Adı> <Sezon No>`\nÖrnek: `/kontrol Mezarlık 2`")
+                return
+
+            query = args[1].strip()
+            clean_title, s, _ = Downloader.parse_title_season_episode(query)
+            target_season = s if f"{s}" in query else None
+
+            status_msg = await message.reply_text(f"🔍 **'{clean_title}'** için eklenti kaynakları taranıyor ve yükleme durumu denetleniyor...")
+            
+            total_avail, total_up, missing_queued, missing_eps = await self.verify_and_auto_heal(clean_title, target_season)
+            
+            if total_avail == 0:
+                await status_msg.edit_text(f"❌ **'{clean_title}'** için eklentilerde kaynak bulunamadı.")
+                return
+
+            rep_text = (
+                f"📊 **Bütünlük & Yükleme Raporu:**\n\n"
+                f"🎬 **Dizi:** `{clean_title}`\n"
+                f"📦 **Kaynakta Bulunan Bölüm:** `{total_avail}`\n"
+                f"✅ **Yüklenmiş Bölüm:** `{total_up}`\n"
+            )
+
+            if missing_queued > 0:
+                m_str = ", ".join([f"S{ms}E{me}" for ms, me in missing_eps[:10]])
+                if len(missing_eps) > 10:
+                    m_str += f" ve {len(missing_eps)-10} bölüm daha..."
+                rep_text += f"\n🚨 **{missing_queued} Eksik Bölüm Tespit Edildi!**\n`{m_str}`\n\n🚀 Tüm eksik bölümler yüksek öncelikle indirme kuyruğuna alındı ve indirme başladı!"
+            else:
+                rep_text += "\n🎉 **Tüm bölümler eksiksiz ve tam olarak mevcut!** Eksik bölüm yok."
+
+            await status_msg.edit_text(rep_text)
 
         # Callback Handlers (Buton Tıklamaları)
         @self.app.on_callback_query()
@@ -610,6 +648,9 @@ class DiziBotManager:
                 db.update_queue_progress(job_id, "completed", 1.0)
                 uploaded_ok = True
                 logger.info(f"✅ Başarıyla Yüklendi! Mesaj ID: {msg_id}")
+                
+                # İşlem Sonrası Otomatik Eksik Bölüm Kontrolü (Auto-Healer Hook)
+                asyncio.create_task(self._auto_heal_hook(clean_title, season))
                 break
             except Exception as upload_err:
                 logger.error(f"Telegram yükleme hatası: {upload_err}")
@@ -621,6 +662,68 @@ class DiziBotManager:
 
         if not uploaded_ok:
             db.update_queue_progress(job_id, "failed", error_msg="Tüm alternatif akışlar başarısız oldu")
+
+    async def _auto_heal_hook(self, series_title: str, season: int):
+        """Yükleme tamamlandıktan sonra arka planda eksik bölüm var mı kontrol eder ve kuyruğa alır."""
+        try:
+            await asyncio.sleep(5)
+            _, _, missing_count, _ = await self.verify_and_auto_heal(series_title, target_season=season)
+            if missing_count > 0:
+                logger.info(f"Auto-Heal: {series_title} Sezon {season} için {missing_count} eksik bölüm kuyruğa eklendi.")
+        except Exception as e:
+            logger.debug(f"Auto-heal hook hatası: {e}")
+
+    async def verify_and_auto_heal(self, series_title: str, target_season: Optional[int] = None) -> Tuple[int, int, int, List[Tuple[int, int]]]:
+        """
+        Dizinin eklentideki tüm bölümlerini veritabanındaki yüklenenlerle karşılaştırır.
+        Eksik bölümleri otomatik olarak tespit edip yüksek öncelikle kuyruğa ekler.
+        Döner: (toplam_bölüm, yüklenmiş_bölüm, kuyruğa_eklenen_eksik_sayısı, eksik_bölümler_listesi)
+        """
+        clean_title, _, _ = Downloader.parse_title_season_episode(series_title)
+        results = await Downloader.search_all_plugins(clean_title)
+        if not results:
+            return 0, 0, 0, []
+
+        best_item = results[0]
+        plugin_name = best_item.get("plugin_name", "")
+        item_url = best_item.get("url", "")
+
+        try:
+            detail = await local_load_item(plugin_name, item_url)
+        except Exception as e:
+            logger.error(f"verify_and_auto_heal detail hatası: {e}")
+            return 0, 0, 0, []
+
+        episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
+        if not episodes:
+            return 0, 0, 0, []
+
+        uploaded_set = db.get_uploaded_episodes_for_series(clean_title)
+        
+        all_candidate_eps = []
+        for ep in episodes:
+            s = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
+            e = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+            if target_season is not None and s != target_season:
+                continue
+            all_candidate_eps.append((s, e))
+
+        missing_eps = []
+        queued_count = 0
+
+        for s, e in all_candidate_eps:
+            if (s, e) not in uploaded_set:
+                missing_eps.append((s, e))
+                if not db.is_job_in_queue(clean_title, s, e):
+                    db.add_to_queue(title=clean_title, season=s, episode=e, priority=3)
+                    queued_count += 1
+
+        if queued_count > 0:
+            asyncio.create_task(self.process_queue())
+
+        total_avail = len(all_candidate_eps)
+        total_up = total_avail - len(missing_eps)
+        return total_avail, total_up, queued_count, missing_eps
 
     async def process_queue(self):
         """Kuyruktaki işleri çoklu eşzamanlı işçi havuzuyla (multi-worker) işler."""
