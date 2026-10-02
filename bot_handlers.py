@@ -690,12 +690,21 @@ class DiziBotManager:
                     logger.warning(f"[{p_name}] İndirme başarısız oldu, sonraki kaynağa geçiliyor...")
                     continue
 
-                # Boyut Kontrolü (< 1950 MB)
+                # Boyut Kontrolü (< 1950 MB) - Aşarsa Otomatik Optimize Et
                 f_size = temp_file.stat().st_size
                 if f_size > config.max_file_size_bytes:
-                    logger.warning(f"[{p_name}] Dosya boyutu Telegram limitini aşıyor ({f_size / (1024*1024):.1f} MB), alternatif aranıyor...")
-                    temp_file.unlink(missing_ok=True)
-                    continue
+                    logger.info(f"[{p_name}] Dosya boyutu Telegram limitini aşıyor ({f_size / (1024*1024):.1f} MB), <1.9GB için optimize ediliyor...")
+                    opt_file = temp_file.with_name(f"opt_{temp_file.name}")
+                    opt_ok = await Downloader.compress_video_to_limit(temp_file, opt_file, target_mb=1850)
+                    if opt_ok and opt_file.exists():
+                        temp_file.unlink(missing_ok=True)
+                        temp_file = opt_file
+                        f_size = temp_file.stat().st_size
+                        logger.info(f"[{p_name}] Video optimize edildi: {f_size / (1024*1024):.1f} MB")
+                    else:
+                        logger.warning(f"[{p_name}] Optimizasyon başarısız, alternatif aranıyor...")
+                        temp_file.unlink(missing_ok=True)
+                        continue
 
                 # Thumbnail Çıkart
                 thumb_path = await Downloader.extract_thumbnail(temp_file)

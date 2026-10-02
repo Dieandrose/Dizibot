@@ -461,3 +461,44 @@ class Downloader:
         proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         await proc.communicate()
         return thumb_path if thumb_path.exists() else None
+
+    @classmethod
+    async def compress_video_to_limit(cls, input_path: Path, output_path: Path, target_mb: int = 1850) -> bool:
+        """2GB sınırını aşan videoları Telegram limitine (<1.9GB) optimize eder."""
+        try:
+            probe_cmd = [
+                "ffprobe", "-v", "error", 
+                "-show_entries", "format=duration", 
+                "-of", "default=noprint_wrappers=1:nokey=1", 
+                str(input_path)
+            ]
+            proc = await asyncio.create_subprocess_exec(*probe_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout, _ = await proc.communicate()
+            try:
+                duration = float(stdout.decode().strip())
+            except Exception:
+                duration = 7200.0
+
+            if duration <= 0:
+                duration = 7200.0
+
+            target_total_bits = target_mb * 8 * 1024 * 1024
+            target_v_bitrate = int((target_total_bits / duration) - 128000)
+            target_v_bitrate = max(500000, target_v_bitrate)
+
+            cmd = [
+                "ffmpeg", "-y", "-i", str(input_path),
+                "-c:v", "libx264", "-preset", "veryfast",
+                "-b:v", str(target_v_bitrate),
+                "-maxrate", str(int(target_v_bitrate * 1.3)),
+                "-bufsize", str(int(target_v_bitrate * 2)),
+                "-c:a", "copy",
+                "-movflags", "+faststart",
+                str(output_path)
+            ]
+            proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            await proc.communicate()
+            return output_path.exists() and output_path.stat().st_size > 1024 * 1024
+        except Exception as e:
+            logger.error(f"Video optimize hatası: {e}")
+            return False
