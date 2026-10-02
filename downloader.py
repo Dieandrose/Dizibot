@@ -309,22 +309,49 @@ class Downloader:
                 await download_seg_list(audio_segs, tmp_audio_file, is_video=False)
 
             # FFmpeg ile Senkron Birleştirme (Muxing)
+            is_audio_aac = False
+            if tmp_audio_file and tmp_audio_file.exists() and tmp_audio_file.stat().st_size > 0:
+                # Audio codec kontrolü
+                try:
+                    p_probe = await asyncio.create_subprocess_exec(
+                        "ffprobe", "-v", "error", "-select_streams", "a:0",
+                        "-show_entries", "stream=codec_name", "-of", "default=noprint_wrappers=1:nokey=1",
+                        str(tmp_audio_file),
+                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                    )
+                    out, _ = await p_probe.communicate()
+                    if b"aac" in out.lower():
+                        is_audio_aac = True
+                except Exception:
+                    pass
+
             cmd = ["ffmpeg", "-y", "-i", str(tmp_video_file)]
             if tmp_audio_file and tmp_audio_file.exists() and tmp_audio_file.stat().st_size > 0:
                 cmd.extend(["-i", str(tmp_audio_file)])
-                cmd.extend([
-                    "-c:v", "copy",
-                    "-c:a", "aac",
-                    "-af", "aresample=async=1000:first_pts=0",
-                    "-shortest",
-                    "-movflags", "+faststart",
-                    str(output_path)
-                ])
+                if is_audio_aac:
+                    cmd.extend([
+                        "-c:v", "copy",
+                        "-c:a", "copy",
+                        "-bsf:a", "aac_adtstoasc",
+                        "-shortest",
+                        "-movflags", "+faststart",
+                        str(output_path)
+                    ])
+                else:
+                    cmd.extend([
+                        "-c:v", "copy",
+                        "-c:a", "aac",
+                        "-b:a", "192k",
+                        "-af", "aresample=async=1000:first_pts=0",
+                        "-shortest",
+                        "-movflags", "+faststart",
+                        str(output_path)
+                    ])
             else:
                 cmd.extend([
                     "-c:v", "copy",
-                    "-c:a", "aac",
-                    "-af", "aresample=async=1000:first_pts=0",
+                    "-c:a", "copy",
+                    "-bsf:a", "aac_adtstoasc",
                     "-movflags", "+faststart",
                     str(output_path)
                 ])
