@@ -175,7 +175,7 @@ class DiziBotManager:
 
             SEARCH_CACHE[str(message.from_user.id)] = results
             buttons = []
-            for idx, r in enumerate(results[:12]):
+            for idx, r in enumerate(results[:15]):
                 title = r.get("title", "İçerik")
                 plugin = r.get("plugin_name", "Kaynak")
                 buttons.append([InlineKeyboardButton(f"🎬 {title} [{plugin}]", callback_data=f"sel_res:{idx}")])

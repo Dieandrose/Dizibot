@@ -114,13 +114,12 @@ class Downloader:
         common_words = q_words.intersection(t_words)
         if common_words:
             overlap_ratio = len(common_words) / len(q_words)
-            if overlap_ratio >= 0.5:
-                seq_ratio = difflib.SequenceMatcher(None, q_clean, t_clean).ratio()
-                return (overlap_ratio * 50.0) + (seq_ratio * 35.0)
+            seq_ratio = difflib.SequenceMatcher(None, q_clean, t_clean).ratio()
+            return (overlap_ratio * 40.0) + (seq_ratio * 30.0)
 
         seq_ratio = difflib.SequenceMatcher(None, q_clean, t_clean).ratio()
-        if seq_ratio >= 0.65:
-            return seq_ratio * 75.0
+        if seq_ratio >= 0.5:
+            return seq_ratio * 60.0
 
         return 0.0
 
@@ -190,7 +189,7 @@ class Downloader:
                     if key not in seen:
                         seen.add(key)
                         score = cls.calculate_relevance(query, item["title"])
-                        if score >= 45.0:
+                        if score >= 30.0:
                             item["relevance_score"] = score
                             flat.append(item)
 
