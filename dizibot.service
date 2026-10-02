@@ -9,8 +9,8 @@ WorkingDirectory=/root/dizibot
 ExecStart=/root/Darkbox/.venv/bin/python /root/dizibot/main.py
 Restart=always
 RestartSec=10
-StandardOutput=append:/root/dizibot/data/dizibot.log
-StandardError=append:/root/dizibot/data/dizibot.log
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target

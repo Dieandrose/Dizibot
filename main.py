@@ -82,9 +82,10 @@ async def main():
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, signal_handler)
 
+    from pyrogram import idle
     try:
-        await stop_event.wait()
-    except asyncio.CancelledError:
+        await idle()
+    except (asyncio.CancelledError, KeyboardInterrupt):
         pass
     finally:
         logger.info("Bot istemcisi durduruluyor...")
