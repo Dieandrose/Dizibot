@@ -84,10 +84,27 @@ class Downloader:
     @classmethod
     def calculate_relevance(cls, query: str, title: str) -> float:
         """Arama sorgusu ile içerik başlığı arasındaki alaka skorunu (0-100) hesaplar."""
+        tr_map = str.maketrans("çğıöşüâîûÇĞİÖŞÜÂÎÛ", "cgiosuaiuCGIOSUAIU")
+
         def _norm(s: str) -> str:
+            if not s:
+                return ""
             s = s.lower().strip()
-            tr_map = str.maketrans("çğıöşüâîû", "cgiosuaiu")
+            # Parantez/Köşeli parantez içlerini temizle: (2024), [DizipalX], (Türkçe Dublaj) vb.
+            s = re.sub(r'[\(\[\{].*?[\)\]\}]', ' ', s)
             s = s.translate(tr_map)
+            
+            # Gürültü kelimeleri ve ekleri temizle
+            noise = [
+                'turkce dublaj', 'türkçe dublaj', 'turkce altyazili', 'türkçe altyazılı',
+                'altyazili', 'altyazılı', 'dublaj', 'full hd izle', 'hd izle', 'full hd',
+                'hd', 'izle', 'dizipal', 'dizibox', 'dizi', 'film', 'filmi', '1080p',
+                '720p', '4k', 'uhd', 'tek parca', 'tek parça', 'son bolum', 'son bölüm',
+                'tum bolumler', 'tüm bölümler', 'sezon', 'bolum', 'bölüm'
+            ]
+            for n in sorted(noise, key=len, reverse=True):
+                s = re.sub(rf'\b{n}\b', ' ', s)
+
             s = re.sub(r"[^\w\s]", " ", s)
             return " ".join(s.split())
 
@@ -99,27 +116,30 @@ class Downloader:
 
         if q_clean == t_clean:
             return 100.0
+
+        # Başlık tam olarak sorgu ile başlıyor ve devamında sadece yıl veya boşluk varsa
         if t_clean.startswith(q_clean):
-            return 95.0
-        if q_clean in t_clean:
-            ratio = len(q_clean) / len(t_clean)
-            return 80.0 + (ratio * 15.0)
+            rest = t_clean[len(q_clean):].strip()
+            if not rest or rest.isdigit():
+                return 95.0
 
-        q_words = set(q_clean.split())
-        t_words = set(t_clean.split())
+        q_words = q_clean.split()
+        t_words = t_clean.split()
 
-        if q_words.issubset(t_words):
-            return 85.0
+        # Kısa sorgularda (1-2 kelime, örn: "FROM", "LOST", "YOU", "DARK")
+        # Başlıkta yabancı/alakasız kelimeler olamaz (örn: "Tales from the Crypt", "Stranger Things" elenir)
+        if len(q_words) <= 2:
+            if q_clean == t_clean:
+                return 100.0
+            return 0.0
 
-        common_words = q_words.intersection(t_words)
-        if common_words:
-            overlap_ratio = len(common_words) / len(q_words)
-            seq_ratio = difflib.SequenceMatcher(None, q_clean, t_clean).ratio()
-            return (overlap_ratio * 40.0) + (seq_ratio * 30.0)
+        # Çok kelimeli sorgularda (>= 3 kelime)
+        if q_words == t_words:
+            return 100.0
 
         seq_ratio = difflib.SequenceMatcher(None, q_clean, t_clean).ratio()
-        if seq_ratio >= 0.5:
-            return seq_ratio * 60.0
+        if seq_ratio >= 0.85:
+            return seq_ratio * 100.0
 
         return 0.0
 
