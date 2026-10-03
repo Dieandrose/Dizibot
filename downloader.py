@@ -535,7 +535,7 @@ class Downloader:
                 ])
 
             proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-            await proc.communicate()
+            _, err = await proc.communicate()
 
             # Geçici dosyaları temizle
             if tmp_video_file.exists():
@@ -543,7 +543,11 @@ class Downloader:
             if tmp_audio_file and tmp_audio_file.exists():
                 tmp_audio_file.unlink(missing_ok=True)
 
-            return output_path.exists() and output_path.stat().st_size > 1024 * 1024
+            if not (output_path.exists() and output_path.stat().st_size > 1024 * 1024):
+                if err:
+                    logger.error(f"FFmpeg birleştirme hatası: {err.decode('utf-8', errors='ignore')[-300:]}")
+                return False
+            return True
 
     @classmethod
     async def extract_thumbnail(cls, video_path: Path) -> Optional[Path]:

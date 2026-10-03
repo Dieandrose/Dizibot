@@ -221,9 +221,12 @@ class DiziBotManager:
                 await message.reply_text("📋 Kuyrukta bekleyen işlem yok.")
                 return
 
-            q_text = "📋 **İndirme Kuyruğu:**\n\n"
-            for j in jobs:
-                q_text += f"• `#{j['id']}` | **{j['title']}** (S{j['season']}E{j['episode']}) ➔ `{j['status']}`\n"
+            q_text = f"📋 **İndirme Kuyruğu ({len(jobs)} İşlem):**\n\n"
+            for j in jobs[:15]:
+                disp = f"{j['title']} (Film)" if (j.get('season') == 0 or j.get('season') is None) else f"{j['title']} S{j['season']}E{j['episode']}"
+                q_text += f"• `#{j['id']}` | **{disp}** ➔ `{j['status']}`\n"
+            if len(jobs) > 15:
+                q_text += f"\n... ve **{len(jobs) - 15}** işlem daha kuyrukta bekliyor."
             await message.reply_text(q_text)
 
         # 6. /iptal <id> veya /iptal hepsi
@@ -773,48 +776,60 @@ class DiziBotManager:
             return text, markup
 
         text = "📊 **Canlı İndirme & Telegram Yükleme Durumu:**\n\n"
+        live_shown = 0
         
         for j in active_jobs:
             job_id = j["id"]
             t_info = LIVE_TRANSFERS.get(job_id)
-            status_label = j["status"].upper()
-            p_val = j["progress"]
-            
-            if t_info and t_info["phase"] == "uploading":
-                cur_mb = t_info["current"] / (1024 * 1024)
-                tot_mb = t_info["total"] / (1024 * 1024)
-                pct = int(t_info["progress"] * 100)
-                p_bar = "▓" * int(t_info["progress"] * 10) + "░" * (10 - int(t_info["progress"] * 10))
-                speed = t_info["speed_mb"]
+            status_label = (j.get("status") or "queued").upper()
+            p_val = float(j.get("progress") or 0.0)
+            disp_title = f"{j['title']} (Film)" if (j.get('season') == 0 or j.get('season') is None) else f"{j['title']} S{j['season']:02d}E{j['episode']:02d}"
+
+            if t_info and t_info.get("phase") == "uploading":
+                cur_mb = (t_info.get("current") or 0) / (1024 * 1024)
+                tot_mb = (t_info.get("total") or 0) / (1024 * 1024)
+                pct_f = min(1.0, max(0.0, float(t_info.get("progress") or 0.0)))
+                pct = int(pct_f * 100)
+                p_bar = "▓" * int(pct_f * 10) + "░" * (10 - int(pct_f * 10))
+                speed = float(t_info.get("speed_mb") or 0.0)
                 rem_sec = int((tot_mb - cur_mb) / max(0.1, speed)) if speed > 0 else 0
                 
                 text += (
-                    f"🎬 **{j['title']} S{j['season']:02d}E{j['episode']:02d}**\n"
+                    f"🎬 **{disp_title}**\n"
                     f"• Aşama: 📤 `TELEGRAM'A YÜKLENİYOR` (MTProto)\n"
                     f"• İlerleme: `[{p_bar}] %{pct}` ({cur_mb:.1f} MB / {tot_mb:.1f} MB)\n"
                     f"• Hız: `⚡ {speed:.1f} MB/s` | Kalan: `⏳ ~{rem_sec} sn`\n"
                     f"• İşlem ID: `#{job_id}`\n\n"
                 )
-            elif t_info and t_info["phase"] == "downloading":
-                pct = int(t_info.get("progress", p_val) * 100)
-                p_bar = "▓" * int(t_info.get("progress", p_val) * 10) + "░" * (10 - int(t_info.get("progress", p_val) * 10))
+                live_shown += 1
+            elif t_info and t_info.get("phase") == "downloading":
+                pct_f = min(1.0, max(0.0, float(t_info.get("progress") or p_val)))
+                pct = int(pct_f * 100)
+                p_bar = "▓" * int(pct_f * 10) + "░" * (10 - int(pct_f * 10))
                 cur_seg = t_info.get("current_seg", 0)
                 tot_seg = t_info.get("total_seg", 0)
                 
                 text += (
-                    f"🎬 **{j['title']} S{j['season']:02d}E{j['episode']:02d}**\n"
+                    f"🎬 **{disp_title}**\n"
                     f"• Aşama: 📥 `KAYNAKTAN İNDİRİLİYOR` (HLS)\n"
                     f"• İlerleme: `[{p_bar}] %{pct}` ({cur_seg}/{tot_seg} Parça)\n"
                     f"• İşlem ID: `#{job_id}`\n\n"
                 )
-            else:
-                p_bar = "▓" * int(p_val * 10) + "░" * (10 - int(p_val * 10))
+                live_shown += 1
+            elif live_shown < 3:
+                pct_f = min(1.0, max(0.0, p_val))
+                p_bar = "▓" * int(pct_f * 10) + "░" * (10 - int(pct_f * 10))
                 text += (
-                    f"🎬 **{j['title']} S{j['season']:02d}E{j['episode']:02d}**\n"
+                    f"🎬 **{disp_title}**\n"
                     f"• Durum: ⏳ `{status_label}`\n"
-                    f"• İlerleme: `[{p_bar}] %{int(p_val * 100)}`\n"
+                    f"• İlerleme: `[{p_bar}] %{int(pct_f * 100)}`\n"
                     f"• İşlem ID: `#{job_id}`\n\n"
                 )
+                live_shown += 1
+
+        queued_remaining = len(active_jobs) - live_shown
+        if queued_remaining > 0:
+            text += f"📋 **Sırada Bekleyen:** `{queued_remaining}` ek işlem kuyrukta.\n\n"
 
         # Disk Bilgisi
         try:
