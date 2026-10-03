@@ -1233,11 +1233,8 @@ class DiziBotManager:
                     logger.warning(f"[{p_name}] İndirme başarısız oldu, sonraki kaynağa geçiliyor...")
                     continue
 
-                has_multi_audio = dl_res.get("has_multi_audio", False)
-                has_subtitles = dl_res.get("has_subtitles", False)
-
-                audio_badge = "🇹🇷 Türkçe Dublaj | 🇬🇧 Orijinal" if has_multi_audio else "🇹🇷 Türkçe Dublaj"
-                sub_badge = "\n💬 **Altyazı:** 🇹🇷 Türkçe (Açılıp Kapanabilir / CC)" if has_subtitles else ""
+                audio_badge = "🇹🇷 Türkçe Dublaj"
+                sub_badge = ""
 
                 if db.is_job_cancelled(job_id):
                     break
