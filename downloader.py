@@ -140,45 +140,52 @@ class Downloader:
             "Dizimom", "Dizimia", "Dizibal", "Dizibol", "Ddizi", "DiziKorea",
             "DiziIzleClick", "DizifilmLife", "FilmCenneti", "FilmIzleCH", "Filmhane",
             "FullHDFilmIzle", "HDFilmDelisi", "HDFilmUS", "RoketDizi", "SineMerkez",
-            "Sinezy", "TvFilmIzle", "WFilmIzle", "WebDramaTurkey", "ZxcPrime", "Aether", "MeowTV", "Medya"
+            "Sinezy", "TvFilmIzle", "WFilmIzle", "WebDramaTurkey", "ZxcPrime", "Aether", "MeowTV"
         ]
 
-        ordered = [p for p in top_priority if p in all_names]
+        ignored_plugins = {"CanliTV", "Medya", "DarkTV", "M3uListem"}
+        ordered = [p for p in top_priority if p in all_names and p not in ignored_plugins]
         for p in all_names:
-            if p not in ordered and p != "DarkTV":
+            if p not in ordered and p not in ignored_plugins:
                 ordered.append(p)
 
         return ordered if ordered else config.plugins_priority
 
     @classmethod
     async def search_all_plugins(cls, query: str) -> List[Dict[str, Any]]:
-        """DarkBox'taki TÜM 50+ eklentide paralel arama yapar ve akıllı alaka puanlamasıyla filtreler."""
+        """DarkBox eklentilerinde kontrollü, hızlı ve bellek korumalı paralel arama yapar."""
         plugins = cls.get_all_plugin_names()
+        sem = asyncio.Semaphore(12)
         
         async def _search_plugin(p: str):
-            try:
-                res = await asyncio.wait_for(local_search(p, query), timeout=3.5)
-                out = []
-                for item in res:
-                    title = item.get("title") if isinstance(item, dict) else (item.title if hasattr(item, "title") else str(item))
-                    url = item.get("url") if isinstance(item, dict) else (item.url if hasattr(item, "url") else "")
-                    poster = item.get("poster") if isinstance(item, dict) else (item.poster if hasattr(item, "poster") else "")
-                    desc = item.get("description") if isinstance(item, dict) else (item.description if hasattr(item, "description") else "")
-                    if title and url:
-                        out.append({
-                            "title": title,
-                            "url": url,
-                            "poster": poster,
-                            "description": desc,
-                            "plugin_name": p
-                        })
-                return out
-            except Exception as e:
-                logger.debug(f"Plugin {p} search error: {e}")
-                return []
+            async with sem:
+                try:
+                    res = await asyncio.wait_for(local_search(p, query), timeout=2.5)
+                    out = []
+                    for item in res:
+                        title = item.get("title") if isinstance(item, dict) else (item.title if hasattr(item, "title") else str(item))
+                        url = item.get("url") if isinstance(item, dict) else (item.url if hasattr(item, "url") else "")
+                        poster = item.get("poster") if isinstance(item, dict) else (item.poster if hasattr(item, "poster") else "")
+                        desc = item.get("description") if isinstance(item, dict) else (item.description if hasattr(item, "description") else "")
+                        if title and url:
+                            out.append({
+                                "title": title,
+                                "url": url,
+                                "poster": poster,
+                                "description": desc,
+                                "plugin_name": p
+                            })
+                    return out
+                except Exception as e:
+                    logger.debug(f"Plugin {p} search error: {e}")
+                    return []
 
-        tasks = [_search_plugin(p) for p in plugins]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        tasks = [asyncio.create_task(_search_plugin(p)) for p in plugins]
+        done, pending = await asyncio.wait(tasks, timeout=4.5)
+        for t in pending:
+            t.cancel()
+            
+        results = [t.result() for t in done if not t.cancelled() and not t.exception()]
         
         flat = []
         seen = set()
@@ -447,8 +454,8 @@ class Downloader:
                 if total == 0:
                     return
 
-                batch_size = 35
-                sem = asyncio.Semaphore(16)
+                batch_size = 15
+                sem = asyncio.Semaphore(10)
                 done = 0
 
                 async def fetch_seg(idx: int, s_url: str):
