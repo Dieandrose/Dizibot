@@ -1240,8 +1240,6 @@ class DiziBotManager:
                     caption = (
                         f"🎬 **{clean_title}**\n\n"
                         f"📌 **Tür:** Film\n"
-                        f"🎙️ **Ses:** {audio_badge}"
-                        f"{sub_badge}\n"
                         f"📦 **Boyut:** {f_size / (1024*1024):.1f} MB\n\n"
                         f"🌐 **Daha Fazlası İçin :**  izle.darkbox.com.tr:9443"
                     )
@@ -1249,8 +1247,6 @@ class DiziBotManager:
                     caption = (
                         f"🎬 **{clean_title}**\n"
                         f"📌 **{season}. Sezon {episode}. Bölüm**\n"
-                        f"🎙️ **Ses:** {audio_badge}"
-                        f"{sub_badge}\n"
                         f"📦 **Boyut:** {f_size / (1024*1024):.1f} MB\n\n"
                         f"🌐 **Daha Fazlası İçin :**  izle.darkbox.com.tr:9443"
                     )
