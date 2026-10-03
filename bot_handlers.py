@@ -350,6 +350,27 @@ class DiziBotManager:
 
             await message.reply_text("\n".join(lines))
 
+        @self.app.on_message(filters.command(["konusil", "deltopic"]))
+        async def cmd_del_topic(client: Client, message: Message):
+            if message.from_user and message.from_user.id not in config.admin_ids:
+                await message.reply_text("⚠️ Bu komut sadece yöneticiler içindir.")
+                return
+            parts = message.text.split(maxsplit=1)
+            if len(parts) < 2:
+                await message.reply_text("⚠️ Kullanım: `/konusil <Dizi Adı>`")
+                return
+            dizi_name = parts[1].strip()
+            norm = db._norm_title(dizi_name)
+            with db._get_conn() as conn:
+                cur = conn.cursor()
+                cur.execute("DELETE FROM topics WHERE series_title = ?", (norm,))
+                cnt = cur.rowcount
+                conn.commit()
+            if cnt > 0:
+                await message.reply_text(f"🗑️ **'{dizi_name}'** konusu başarıyla veritabanından silindi.")
+            else:
+                await message.reply_text(f"⚠️ **'{dizi_name}'** adında kayıtlı bir konu bulunamadı.")
+
         # 8.1 Forum Konusu Oluşturulduğunda / Düzenlendiğinde Otomatik Yakalama
         @self.app.on_message(filters.chat(config.target_chat_id) & filters.service)
         async def on_topic_action(client: Client, message: Message):
