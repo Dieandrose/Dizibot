@@ -693,10 +693,10 @@ class Downloader:
             input_idx = 1
             map_args = ["-map", "0:v:0"]
             audio_track_count = 0
+            tr_offset = 0.0
 
             # 1. Ses Kanalı: Türkçe Dublaj (Otomatik Ofset / Senkron Düzeltmeli)
             if tmp_audio_tr_file and tmp_audio_tr_file.exists() and tmp_audio_tr_file.stat().st_size > 0:
-                tr_offset = 0.0
                 if tmp_audio_en_file and tmp_audio_en_file.exists() and tmp_audio_en_file.stat().st_size > 0:
                     tr_offset = await cls.detect_audio_offset(tmp_audio_tr_file, tmp_audio_en_file)
                 elif tmp_video_file and tmp_video_file.exists():
@@ -749,8 +749,9 @@ class Downloader:
             cmd.extend(map_args)
             cmd.extend([
                 "-c:v", "copy",
-                "-c:a", "copy",
-                "-bsf:a", "aac_adtstoasc",
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-af", "aresample=async=1000",
                 "-avoid_negative_ts", "make_zero",
                 "-shortest",
                 "-movflags", "+faststart",
@@ -770,7 +771,12 @@ class Downloader:
                 fb_map = ["-map", "0:v:0"]
                 fb_in = 1
                 if tmp_audio_tr_file and tmp_audio_tr_file.exists():
-                    cmd_fallback.extend(["-i", str(tmp_audio_tr_file)])
+                    if tr_offset > 0.25:
+                        cmd_fallback.extend(["-ss", f"{tr_offset:.3f}", "-i", str(tmp_audio_tr_file)])
+                    elif tr_offset < -0.25:
+                        cmd_fallback.extend(["-itsoffset", f"{abs(tr_offset):.3f}", "-i", str(tmp_audio_tr_file)])
+                    else:
+                        cmd_fallback.extend(["-i", str(tmp_audio_tr_file)])
                     fb_map.extend(["-map", f"{fb_in}:a:0"])
                     fb_in += 1
                 if tmp_audio_en_file and tmp_audio_en_file.exists():
@@ -781,8 +787,13 @@ class Downloader:
                     fb_map.extend(["-map", "0:a:0?"])
                 cmd_fallback.extend(fb_map)
                 cmd_fallback.extend([
-                    "-c:v", "copy", "-c:a", "copy", "-bsf:a", "aac_adtstoasc",
-                    "-avoid_negative_ts", "make_zero", "-shortest", "-movflags", "+faststart",
+                    "-c:v", "copy",
+                    "-c:a", "aac",
+                    "-b:a", "192k",
+                    "-af", "aresample=async=1000",
+                    "-avoid_negative_ts", "make_zero",
+                    "-shortest",
+                    "-movflags", "+faststart",
                     str(output_path)
                 ])
                 proc_fb = await asyncio.create_subprocess_exec(*cmd_fallback, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
