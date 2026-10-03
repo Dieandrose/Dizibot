@@ -576,6 +576,7 @@ class Downloader:
             ]
             if tmp_audio_file and tmp_audio_file.exists() and tmp_audio_file.stat().st_size > 0:
                 cmd.extend([
+                    "-fflags", "+genpts+discardcorrupt+igndts",
                     "-i", str(tmp_audio_file),
                     "-map", "0:v:0",
                     "-map", "1:a:0",
@@ -583,7 +584,7 @@ class Downloader:
                     "-c:a", "aac",
                     "-b:a", "192k",
                     "-ar", "48000",
-                    "-af", "aresample=async=1000:first_pts=0",
+                    "-af", "aresample=async=1",
                     "-avoid_negative_ts", "make_zero",
                     "-shortest",
                     "-movflags", "+faststart",
@@ -597,7 +598,7 @@ class Downloader:
                     "-c:a", "aac",
                     "-b:a", "192k",
                     "-ar", "48000",
-                    "-af", "aresample=async=1000:first_pts=0",
+                    "-af", "aresample=async=1",
                     "-avoid_negative_ts", "make_zero",
                     "-movflags", "+faststart",
                     str(output_path)
