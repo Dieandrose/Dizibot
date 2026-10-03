@@ -330,21 +330,21 @@ class Downloader:
                 candidates.extend(r)
 
         all_plugins = cls.get_all_plugin_names()
-        # Dublaj önceliği ve eklenti sırasına göre sırala
+        # Eklenti önceliği ve dublaj kalitesine göre sırala
         def dublaj_priority_key(c):
             p = c.get("plugin", "")
             name = (c.get("name") or "").lower()
             title = (c.get("title") or "").lower()
             
-            # Dublaj puanı (100 = Dublaj, 50 = Normal, 10 = Altyazı)
-            score = 50
-            if any(k in name or k in title for k in ["dublaj", "dub", "tr dub", "türkçe dublaj"]):
+            # Dizi65, SineWix, RecTV stüdyo master akışları içerir
+            score = 80 if p in ["Dizi65", "SineWix", "RecTV"] else 50
+            if any(k in name or k in title for k in ["dublaj", "dub", "tr dub", "türkçe dublaj", "türkçe"]):
                 score = 100
             elif any(k in name or k in title for k in ["altyazı", "sub", "eng", "orijinal"]):
                 score = 10
                 
             p_idx = all_plugins.index(p) if p in all_plugins else 999
-            return (-score, p_idx)
+            return (p_idx, -score)
 
         candidates.sort(key=dublaj_priority_key)
         return candidates
