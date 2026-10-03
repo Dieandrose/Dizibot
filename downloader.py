@@ -622,8 +622,8 @@ class Downloader:
                 if total == 0:
                     return
 
-                batch_size = 15
-                sem = asyncio.Semaphore(10)
+                batch_size = 25
+                sem = asyncio.Semaphore(20)
                 done = 0
 
                 async def fetch_seg(idx: int, s_url: str):
@@ -631,7 +631,7 @@ class Downloader:
                     async with sem:
                         for retry in range(3):
                             try:
-                                res = await session.get(s_url, headers=headers, timeout=8.0)
+                                res = await session.get(s_url, headers=headers, timeout=10.0)
                                 if res.status_code == 200 and len(res.content) > 0:
                                     done += 1
                                     if is_video and progress_cb and total > 0 and done % 10 == 0:
@@ -641,7 +641,7 @@ class Downloader:
                                             progress_cb(done / total)
                                     return idx, res.content
                             except Exception:
-                                await asyncio.sleep(0.5 + retry * 0.5)
+                                await asyncio.sleep(0.3 + retry * 0.3)
                         return idx, b""
 
                 with open(dest_file, "wb") as f_out:
@@ -654,12 +654,14 @@ class Downloader:
                             if chunk:
                                 f_out.write(chunk)
 
-            logger.info(f"HLS İndiriliyor: Video={len(video_segs)} parça, Ses(TR)={len(audio_tr_segs)} parça, Ses(EN)={len(audio_en_segs)} parça...")
-            await download_seg_list(video_segs, tmp_video_file, is_video=True)
+            logger.info(f"HLS İndiriliyor (Paralel): Video={len(video_segs)} parça, Ses(TR)={len(audio_tr_segs)} parça, Ses(EN)={len(audio_en_segs)} parça...")
+            dl_tasks = [download_seg_list(video_segs, tmp_video_file, is_video=True)]
             if audio_tr_segs and tmp_audio_tr_file:
-                await download_seg_list(audio_tr_segs, tmp_audio_tr_file, is_video=False)
+                dl_tasks.append(download_seg_list(audio_tr_segs, tmp_audio_tr_file, is_video=False))
             if audio_en_segs and tmp_audio_en_file:
-                await download_seg_list(audio_en_segs, tmp_audio_en_file, is_video=False)
+                dl_tasks.append(download_seg_list(audio_en_segs, tmp_audio_en_file, is_video=False))
+            
+            await asyncio.gather(*dl_tasks)
 
             if not tmp_video_file.exists() or tmp_video_file.stat().st_size < 1024 * 100:
                 logger.warning("HLS video dosyası indirilemedi veya geçersiz boyutta.")
