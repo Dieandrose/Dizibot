@@ -547,11 +547,11 @@ class Downloader:
                     except Exception:
                         pass
 
-            # FFmpeg ile Ultra Hızlı & Kayıpsız Akış Kopyalama (Instant Lossless Stream Copy - 3-5 sn)
+            # FFmpeg ile Frame-Accurate Senkron Birleştirme (Zero-Desync Muxing)
             cmd = [
                 "ffmpeg", "-y",
-                "-threads", "0",
-                "-fflags", "+genpts+discardcorrupt",
+                "-threads", "4",
+                "-fflags", "+genpts+discardcorrupt+igndts",
                 "-i", str(tmp_video_file)
             ]
             if tmp_audio_file and tmp_audio_file.exists() and tmp_audio_file.stat().st_size > 0:
@@ -560,8 +560,10 @@ class Downloader:
                     "-map", "0:v:0",
                     "-map", "1:a:0",
                     "-c:v", "copy",
-                    "-c:a", "copy",
-                    "-bsf:a", "aac_adtstoasc",
+                    "-c:a", "aac",
+                    "-b:a", "192k",
+                    "-ar", "48000",
+                    "-af", "aresample=async=1000:first_pts=0",
                     "-avoid_negative_ts", "make_zero",
                     "-shortest",
                     "-movflags", "+faststart",
@@ -572,8 +574,10 @@ class Downloader:
                     "-map", "0:v:0",
                     "-map", "0:a:0?",
                     "-c:v", "copy",
-                    "-c:a", "copy",
-                    "-bsf:a", "aac_adtstoasc",
+                    "-c:a", "aac",
+                    "-b:a", "192k",
+                    "-ar", "48000",
+                    "-af", "aresample=async=1000:first_pts=0",
                     "-avoid_negative_ts", "make_zero",
                     "-movflags", "+faststart",
                     str(output_path)
