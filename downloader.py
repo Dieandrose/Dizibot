@@ -522,7 +522,7 @@ class Downloader:
                 except Exception:
                     pass
 
-            # FFmpeg ile Hızlı & Senkron Birleştirme (Multi-threaded Frame-Accurate Muxing)
+            # FFmpeg ile Hızlı & Tam Senkron Birleştirme (Frame-Accurate Audio/Video Synchronization)
             cmd = [
                 "ffmpeg", "-y",
                 "-threads", "4",
@@ -530,12 +530,15 @@ class Downloader:
                 "-i", str(tmp_video_file)
             ]
             if tmp_audio_file and tmp_audio_file.exists() and tmp_audio_file.stat().st_size > 0:
-                cmd.extend(["-i", str(tmp_audio_file), "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy"])
-                if is_audio_aac:
-                    cmd.extend(["-c:a", "copy", "-bsf:a", "aac_adtstoasc"])
-                else:
-                    cmd.extend(["-c:a", "aac", "-b:a", "192k"])
                 cmd.extend([
+                    "-i", str(tmp_audio_file),
+                    "-map", "0:v:0",
+                    "-map", "1:a:0",
+                    "-c:v", "copy",
+                    "-c:a", "aac",
+                    "-b:a", "192k",
+                    "-ar", "48000",
+                    "-af", "aresample=async=1:first_pts=0",
                     "-avoid_negative_ts", "make_zero",
                     "-shortest",
                     "-movflags", "+faststart",
