@@ -350,6 +350,43 @@ class Downloader:
         return candidates
 
     @classmethod
+    async def detect_audio_offset(cls, audio_tr_path: Path, audio_ref_path: Path) -> float:
+        """Türkçe ses ile referans ses arasındaki başlangıç/jenerik ofset farkını otomatik tespit eder."""
+        try:
+            cmd_tr = ["ffmpeg", "-t", "120", "-i", str(audio_tr_path), "-af", "silencedetect=noise=-30dB:d=0.4", "-f", "null", "-"]
+            cmd_ref = ["ffmpeg", "-t", "120", "-i", str(audio_ref_path), "-af", "silencedetect=noise=-30dB:d=0.4", "-f", "null", "-"]
+            
+            proc_tr = await asyncio.create_subprocess_exec(*cmd_tr, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            proc_ref = await asyncio.create_subprocess_exec(*cmd_ref, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            
+            _, err_tr = await proc_tr.communicate()
+            _, err_ref = await proc_ref.communicate()
+            
+            txt_tr = err_tr.decode('utf-8', errors='ignore')
+            txt_ref = err_ref.decode('utf-8', errors='ignore')
+            
+            tr_ends = [float(m.group(1)) for m in re.finditer(r"silence_end:\s*([0-9.]+)", txt_tr)]
+            ref_ends = [float(m.group(1)) for m in re.finditer(r"silence_end:\s*([0-9.]+)", txt_ref)]
+            
+            if tr_ends and ref_ends:
+                diff0 = tr_ends[0] - ref_ends[0]
+                if 0.4 <= diff0 <= 15.0:
+                    return diff0
+                    
+                tr_durs = [(float(m.group(1)), float(m.group(2))) for m in re.finditer(r"silence_end:\s*([0-9.]+)\s*\|\s*silence_duration:\s*([0-9.]+)", txt_tr)]
+                ref_durs = [(float(m.group(1)), float(m.group(2))) for m in re.finditer(r"silence_end:\s*([0-9.]+)\s*\|\s*silence_duration:\s*([0-9.]+)", txt_ref)]
+                
+                tr_major = [end for end, dur in tr_durs if dur >= 2.5]
+                ref_major = [end for end, dur in ref_durs if dur >= 2.5]
+                if tr_major and ref_major:
+                    diff_m = tr_major[0] - ref_major[0]
+                    if 0.4 <= diff_m <= 15.0:
+                        return diff_m
+        except Exception as e:
+            logger.debug(f"Audio offset tespiti atlandı: {e}")
+        return 0.0
+
+    @classmethod
     async def download_hls_stream(
         cls, 
         stream_url: str, 
@@ -625,9 +662,20 @@ class Downloader:
             map_args = ["-map", "0:v:0"]
             audio_track_count = 0
 
-            # 1. Ses Kanalı: Türkçe Dublaj
+            # 1. Ses Kanalı: Türkçe Dublaj (Otomatik Ofset / Senkron Düzeltmeli)
             if tmp_audio_tr_file and tmp_audio_tr_file.exists() and tmp_audio_tr_file.stat().st_size > 0:
-                cmd.extend(["-i", str(tmp_audio_tr_file)])
+                tr_offset = 0.0
+                if tmp_audio_en_file and tmp_audio_en_file.exists() and tmp_audio_en_file.stat().st_size > 0:
+                    tr_offset = await cls.detect_audio_offset(tmp_audio_tr_file, tmp_audio_en_file)
+                elif tmp_video_file and tmp_video_file.exists():
+                    tr_offset = await cls.detect_audio_offset(tmp_audio_tr_file, tmp_video_file)
+
+                if tr_offset > 0.35:
+                    logger.info(f"🎙️ Otomatik Ses Senkronizasyonu: Türkçe seste {tr_offset:.2f} saniye gecikme tespit edildi, ofset düzeltiliyor...")
+                    cmd.extend(["-ss", f"{tr_offset:.3f}", "-i", str(tmp_audio_tr_file)])
+                else:
+                    cmd.extend(["-i", str(tmp_audio_tr_file)])
+
                 map_args.extend([
                     "-map", f"{input_idx}:a:0",
                     f"-metadata:s:a:{audio_track_count}", "title=Türkçe Dublaj",
