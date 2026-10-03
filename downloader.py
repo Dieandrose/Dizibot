@@ -310,14 +310,23 @@ class Downloader:
                 candidates.extend(r)
 
         all_plugins = cls.get_all_plugin_names()
-        # Eklenti önceliğine göre sırala
-        def plugin_priority_key(c):
-            p = c["plugin"]
-            if p in all_plugins:
-                return all_plugins.index(p)
-            return 999
+        # Dublaj önceliği ve eklenti sırasına göre sırala
+        def dublaj_priority_key(c):
+            p = c.get("plugin", "")
+            name = (c.get("name") or "").lower()
+            title = (c.get("title") or "").lower()
+            
+            # Dublaj puanı (100 = Dublaj, 50 = Normal, 10 = Altyazı)
+            score = 50
+            if any(k in name or k in title for k in ["dublaj", "dub", "tr dub", "türkçe dublaj"]):
+                score = 100
+            elif any(k in name or k in title for k in ["altyazı", "sub", "eng", "orijinal"]):
+                score = 10
+                
+            p_idx = all_plugins.index(p) if p in all_plugins else 999
+            return (-score, p_idx)
 
-        candidates.sort(key=plugin_priority_key)
+        candidates.sort(key=dublaj_priority_key)
         return candidates
 
     @classmethod
@@ -369,7 +378,9 @@ class Downloader:
 
             # Master Playlist kontrolü
             if any("#EXT-X-STREAM-INF" in l for l in lines) or any("#EXT-X-MEDIA:TYPE=AUDIO" in l for l in lines):
-                # 1. Türkçe Ses Akışı Tespiti
+                # 1. Türkçe Dublaj Ses Akışı Tespiti
+                has_audio_tags = any(l.startswith("#EXT-X-MEDIA:TYPE=AUDIO") for l in lines)
+                turkish_audio_found = False
                 for l in lines:
                     if l.startswith("#EXT-X-MEDIA:TYPE=AUDIO"):
                         m_uri = re.search(r'URI=["\']?([^"\',]+)["\']?', l)
@@ -381,9 +392,14 @@ class Downloader:
                             lang = (m_lang.group(1) if m_lang else "").lower()
                             if any(x in name or x in lang for x in ["tur", "türk", "turkish", "tr", "dublaj"]):
                                 audio_target_url = u
+                                turkish_audio_found = True
                                 break
-                            elif not audio_target_url:
-                                audio_target_url = u
+
+                # Eğer çoklu ses etiketleri var ancak Türkçe dublaj yoksa (yalnızca orijinal/yabancı ses varsa)
+                # Türkçe dublajlı alternatif kaynaklara geçebilmek için bu kaynağı atla
+                if has_audio_tags and not turkish_audio_found:
+                    logger.warning("Bu HLS kaynağında Türkçe Dublaj ses kanalı bulunamadı, sonraki dublajlı kaynağa geçiliyor...")
+                    return False
 
                 # 2. 720p / HD (< 2GB) Video Akışı Tespiti (Öncelikli 720p / Optimum Bitrate)
                 variants = []
