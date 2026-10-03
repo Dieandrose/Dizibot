@@ -531,10 +531,10 @@ class Downloader:
                     except Exception:
                         pass
 
-            # FFmpeg ile Hızlı & Tam Senkron Birleştirme (Frame-Accurate Audio/Video Synchronization)
+            # FFmpeg ile Ultra Hızlı & Kayıpsız Akış Kopyalama (Instant Lossless Stream Copy - 3-5 sn)
             cmd = [
                 "ffmpeg", "-y",
-                "-threads", "4",
+                "-threads", "0",
                 "-fflags", "+genpts+discardcorrupt",
                 "-i", str(tmp_video_file)
             ]
@@ -544,10 +544,8 @@ class Downloader:
                     "-map", "0:v:0",
                     "-map", "1:a:0",
                     "-c:v", "copy",
-                    "-c:a", "aac",
-                    "-b:a", "192k",
-                    "-ar", "48000",
-                    "-af", "aresample=async=1:first_pts=0",
+                    "-c:a", "copy",
+                    "-bsf:a", "aac_adtstoasc",
                     "-avoid_negative_ts", "make_zero",
                     "-shortest",
                     "-movflags", "+faststart",
