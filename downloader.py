@@ -328,6 +328,7 @@ class Downloader:
         progress_cb: Optional[Callable[..., None]] = None
     ) -> bool:
         """HLS akışını video + Türkçe ses parçalarıyla tam senkronlu olarak indirir."""
+        custom_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         referer_url = stream_url
         if stream_url.startswith("/proxy/video") or "proxy/video?url=" in stream_url:
             parsed_proxy = urllib.parse.urlparse(stream_url)
@@ -335,6 +336,8 @@ class Downloader:
             if "url" in qs and qs["url"]:
                 real_target = qs["url"][0]
                 referer_url = qs.get("referer", [real_target])[0]
+                if "user_agent" in qs and qs["user_agent"]:
+                    custom_ua = qs["user_agent"][0]
                 stream_url = real_target
             elif stream_url.startswith("/"):
                 stream_url = f"http://127.0.0.1:3311{stream_url}"
@@ -342,7 +345,7 @@ class Downloader:
         parsed_ref = urllib.parse.urlparse(referer_url)
         origin_header = f"{parsed_ref.scheme}://{parsed_ref.netloc}" if parsed_ref.netloc else ""
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "User-Agent": custom_ua,
             "Referer": referer_url
         }
         if origin_header:
