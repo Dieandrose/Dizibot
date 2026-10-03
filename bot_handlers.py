@@ -560,11 +560,39 @@ class DiziBotManager:
 
             await status_msg.edit_text(rep_text)
 
+        async def _notify_admins_for_request(req_id: int, req_title: str, u_id: int, u_name: str, p_name: str = ""):
+            admin_btn = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("✅ Onayla & Yükle", callback_data=f"req_app:{req_id}"),
+                    InlineKeyboardButton("❌ Reddet", callback_data=f"req_rej:{req_id}")
+                ]
+            ])
+            src_info = f"\n🌐 **Seçilen Kaynak:** `{p_name}`" if p_name else ""
+            admin_msg = (
+                f"📥 **Yeni İçerik İsteği Geldi!**\n\n"
+                f"👤 **İsteyen:** {u_name} (`{u_id}`)\n"
+                f"🎬 **İçerik:** `{req_title}`{src_info}\n"
+                f"📌 **İstek No:** `#{req_id}`"
+            )
+            for adm_id in config.admin_ids:
+                try:
+                    await self.app.send_message(chat_id=adm_id, text=admin_msg, reply_markup=admin_btn)
+                except Exception:
+                    pass
+
         # Callback Handlers (Buton Tıklamaları)
         @self.app.on_callback_query()
         async def handle_callbacks(client: Client, query: CallbackQuery):
             data = query.data
             user_id = query.from_user.id
+            user_name = query.from_user.first_name if query.from_user else "Üye"
+            user_uname = (query.from_user.username or "").lower() if query.from_user else ""
+
+            is_admin = (
+                user_id in config.admin_ids
+                or user_uname in ["dark", "dieandrose"]
+                or "dark" in user_name.lower()
+            )
 
             # 1. Arama Sonucu Seçimi -> Dizi ise Sezonları, Film ise İndirme Butonunu Getir
             if data.startswith("sel_res:"):
@@ -654,6 +682,13 @@ class DiziBotManager:
                 plugin = selected_item.get("plugin_name", "")
                 url = selected_item.get("url", "")
 
+                if not is_admin:
+                    req_id = db.create_request(user_id=user_id, user_name=user_name, query=f"{title} (Tüm Sezonlar)")
+                    await query.answer("📩 İsteğiniz yöneticilere iletildi!", show_alert=True)
+                    await query.edit_message_text(f"📩 **{title}** dizisinin tüm sezonlarını indirme talebiniz yöneticilere iletildi! (İstek No: `#{req_id}`)\n👑 Yöneticiler onayladığında otomatik olarak foruma yüklenecektir.")
+                    await _notify_admins_for_request(req_id, f"{title} (Tüm Sezonlar)", user_id, user_name, plugin)
+                    return
+
                 detail = await local_load_item(plugin, url)
                 episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
                 episodes.sort(key=lambda ep: (
@@ -686,6 +721,13 @@ class DiziBotManager:
                 title = selected_item.get("title", "")
                 plugin = selected_item.get("plugin_name", "")
                 url = selected_item.get("url", "")
+
+                if not is_admin:
+                    req_id = db.create_request(user_id=user_id, user_name=user_name, query=f"{title} (Film)")
+                    await query.answer("📩 İsteğiniz yöneticilere iletildi!", show_alert=True)
+                    await query.edit_message_text(f"📩 **{title}** (Film) talebiniz yöneticilere iletildi! (İstek No: `#{req_id}`)\n👑 Yöneticiler onayladığında '🎬 Filmler' konusuna yüklenecektir.")
+                    await _notify_admins_for_request(req_id, f"{title} (Film)", user_id, user_name, plugin)
+                    return
 
                 job_id = db.add_to_queue(title=title, season=0, episode=0, plugin_name=plugin, item_url=url, priority=3)
                 await query.answer("✅ Film kuyruğa eklendi!")
@@ -739,7 +781,7 @@ class DiziBotManager:
                     await query.answer("⚠️ Arama sonucu süresi doldu, lütfen tekrar arayın.", show_alert=True)
                     return
                 buttons = []
-                for i_idx, r in enumerate(user_cache[:15]):
+                for i_idx, r in enumerate(user_cache[:25]):
                     t_title = r.get("title", "İçerik")
                     p_name = r.get("plugin_name", "Kaynak")
                     buttons.append([InlineKeyboardButton(f"🎬 {t_title} [{p_name}]", callback_data=f"sel_res:{i_idx}")])
@@ -760,6 +802,13 @@ class DiziBotManager:
                 plugin = selected_item.get("plugin_name", "")
                 url = selected_item.get("url", "")
 
+                if not is_admin:
+                    req_id = db.create_request(user_id=user_id, user_name=user_name, query=f"{title} S{s_num:02d}E{e_num:02d}")
+                    await query.answer("📩 İsteğiniz yöneticilere iletildi!", show_alert=True)
+                    await query.edit_message_text(f"📩 **{title} S{s_num:02d}E{e_num:02d}** isteğiniz yöneticilere iletildi! (İstek No: `#{req_id}`)\n👑 Yöneticiler onayladığında otomatik yüklenecektir.")
+                    await _notify_admins_for_request(req_id, f"{title} S{s_num:02d}E{e_num:02d}", user_id, user_name, plugin)
+                    return
+
                 job_id = db.add_to_queue(title=title, season=s_num, episode=e_num, plugin_name=plugin, item_url=url, priority=3)
                 await query.answer("✅ Kuyruğa eklendi!")
                 await query.edit_message_text(f"✅ **{title} S{s_num:02d}E{e_num:02d}** indirme kuyruğuna alındı! (İşlem ID: `{job_id}`)")
@@ -778,6 +827,13 @@ class DiziBotManager:
                 title = selected_item.get("title", "")
                 plugin = selected_item.get("plugin_name", "")
                 url = selected_item.get("url", "")
+
+                if not is_admin:
+                    req_id = db.create_request(user_id=user_id, user_name=user_name, query=f"{title} {s_num}. Sezon")
+                    await query.answer("📩 İsteğiniz yöneticilere iletildi!", show_alert=True)
+                    await query.edit_message_text(f"📩 **{title} {s_num}. Sezon** indirme talebiniz yöneticilere iletildi! (İstek No: `#{req_id}`)\n👑 Yöneticiler onayladığında otomatik yüklenecektir.")
+                    await _notify_admins_for_request(req_id, f"{title} {s_num}. Sezon", user_id, user_name, plugin)
+                    return
 
                 detail = await local_load_item(plugin, url)
                 episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
