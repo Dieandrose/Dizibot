@@ -338,4 +338,25 @@ class Database:
             conn.commit()
             return cur.rowcount > 0
 
+    def get_queue_item(self, job_id: int) -> Optional[Dict[str, Any]]:
+        with self._get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM download_queue WHERE id = ?", (job_id,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def is_job_cancelled(self, job_id: int) -> bool:
+        item = self.get_queue_item(job_id)
+        if not item:
+            return True
+        return item.get("status") == "cancelled"
+
+    def cancel_all_queue(self) -> int:
+        with self._get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute("UPDATE download_queue SET status = 'cancelled', updated_at = ? WHERE status IN ('queued', 'downloading', 'uploading')", (time.time(),))
+            deleted = cur.rowcount
+            conn.commit()
+            return deleted
+
 db = Database()

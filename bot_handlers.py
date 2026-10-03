@@ -48,6 +48,9 @@ SEARCH_CACHE: Dict[str, List[Any]] = {}
 # Canlı indirme ve Telegram yükleme takip haritası
 LIVE_TRANSFERS: Dict[int, Dict[str, Any]] = {}
 
+# Aktif çalışan asyncio görevleri (İptal yönetimi için)
+ACTIVE_TASKS: Dict[int, asyncio.Task] = {}
+
 
 class DiziBotManager:
     def __init__(self):
@@ -238,19 +241,22 @@ class DiziBotManager:
 
             parts = message.text.split()
             if len(parts) == 1 or (len(parts) >= 2 and parts[1].lower() in ["hepsi", "all", "tum", "tümü", "*"]):
-                with sqlite3.connect(db.db_path) as conn:
-                    cur = conn.cursor()
-                    cur.execute("DELETE FROM download_queue WHERE status != 'completed'")
-                    deleted = cur.rowcount
-                    conn.commit()
+                deleted = db.cancel_all_queue()
+                # Çalışan tüm aktif görevleri durdur
+                for task in list(ACTIVE_TASKS.values()):
+                    if task and not task.done():
+                        task.cancel()
+                ACTIVE_TASKS.clear()
                 LIVE_TRANSFERS.clear()
+                
+                # Temp dizinindeki geçici dosyaları temizle
                 for p in TEMP_DIR.glob("*"):
                     try:
                         if p.is_file():
                             p.unlink(missing_ok=True)
                     except Exception:
                         pass
-                await message.reply_text(f"🛑 **Tüm aktif ve bekleyen indirmeler iptal edildi.** ({deleted} işlem kuyruktan silindi)")
+                await message.reply_text(f"🛑 **Tüm aktif ve bekleyen indirmeler iptal edildi.** ({deleted} işlem kuyruktan silindi, geçici dosyalar temizlendi)")
                 return
 
             if not parts[1].isdigit():
@@ -258,9 +264,20 @@ class DiziBotManager:
                 return
 
             job_id = int(parts[1])
+            # Aktif çalışan görevi durdur
+            task = ACTIVE_TASKS.pop(job_id, None)
+            if task and not task.done():
+                task.cancel()
+
             if db.cancel_queue_item(job_id):
                 LIVE_TRANSFERS.pop(job_id, None)
-                await message.reply_text(f"🛑 İşlem `#{job_id}` iptal edildi.")
+                # İlgili temp dosyalarını temizle
+                for p in TEMP_DIR.glob(f"job_{job_id}_*"):
+                    try:
+                        p.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                await message.reply_text(f"🛑 İşlem `#{job_id}` başarıyla iptal edildi ve indirmesi durduruldu.")
             else:
                 await message.reply_text(f"❌ İşlem `#{job_id}` bulunamadı veya zaten tamamlanmış.")
 
@@ -871,6 +888,56 @@ class DiziBotManager:
                 except Exception:
                     await query.answer("Durum güncel.")
 
+            # 8. Buton ile Tekil İptal
+            elif data.startswith("cancel_job:"):
+                if user_id not in config.admin_ids:
+                    await query.answer("⚠️ İptal yetkisi sadece yöneticidedir.", show_alert=True)
+                    return
+                c_id = int(data.split(":")[1])
+                t = ACTIVE_TASKS.pop(c_id, None)
+                if t and not t.done():
+                    t.cancel()
+                if db.cancel_queue_item(c_id):
+                    LIVE_TRANSFERS.pop(c_id, None)
+                    for p in TEMP_DIR.glob(f"job_{c_id}_*"):
+                        try:
+                            p.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                    await query.answer(f"🛑 İşlem #{c_id} iptal edildi.", show_alert=True)
+                else:
+                    await query.answer(f"⚠️ İşlem #{c_id} zaten tamamlanmış veya bulunamadı.", show_alert=True)
+                
+                text, markup = self.get_system_status_report()
+                try:
+                    await query.edit_message_text(text, reply_markup=markup)
+                except Exception:
+                    pass
+
+            # 9. Buton ile Tüm Kuyruğu Temizleme
+            elif data == "cancel_all":
+                if user_id not in config.admin_ids:
+                    await query.answer("⚠️ İptal yetkisi sadece yöneticidedir.", show_alert=True)
+                    return
+                del_count = db.cancel_all_queue()
+                for task in list(ACTIVE_TASKS.values()):
+                    if task and not task.done():
+                        task.cancel()
+                ACTIVE_TASKS.clear()
+                LIVE_TRANSFERS.clear()
+                for p in TEMP_DIR.glob("*"):
+                    try:
+                        if p.is_file():
+                            p.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                await query.answer(f"🛑 Tüm kuyruk temizlendi ({del_count} işlem durduruldu).", show_alert=True)
+                text, markup = self.get_system_status_report()
+                try:
+                    await query.edit_message_text(text, reply_markup=markup)
+                except Exception:
+                    pass
+
     def get_system_status_report(self) -> Tuple[str, InlineKeyboardMarkup]:
         active_jobs = db.get_active_queue()
         if not active_jobs and not LIVE_TRANSFERS:
@@ -880,6 +947,7 @@ class DiziBotManager:
 
         text = "📊 **Canlı İndirme & Telegram Yükleme Durumu:**\n\n"
         live_shown = 0
+        buttons = []
         
         for j in active_jobs:
             job_id = j["id"]
@@ -905,6 +973,7 @@ class DiziBotManager:
                     f"• İşlem ID: `#{job_id}`\n\n"
                 )
                 live_shown += 1
+                buttons.append([InlineKeyboardButton(f"❌ #{job_id} İptal Et", callback_data=f"cancel_job:{job_id}")])
             elif t_info and t_info.get("phase") == "muxing":
                 text += (
                     f"🎬 **{disp_title}**\n"
@@ -913,6 +982,7 @@ class DiziBotManager:
                     f"• İşlem ID: `#{job_id}`\n\n"
                 )
                 live_shown += 1
+                buttons.append([InlineKeyboardButton(f"❌ #{job_id} İptal Et", callback_data=f"cancel_job:{job_id}")])
             elif t_info and t_info.get("phase") == "downloading":
                 pct_f = min(1.0, max(0.0, float(t_info.get("progress") or p_val)))
                 pct = int(pct_f * 100)
@@ -927,6 +997,7 @@ class DiziBotManager:
                     f"• İşlem ID: `#{job_id}`\n\n"
                 )
                 live_shown += 1
+                buttons.append([InlineKeyboardButton(f"❌ #{job_id} İptal Et", callback_data=f"cancel_job:{job_id}")])
             elif live_shown < 3:
                 pct_f = min(1.0, max(0.0, p_val))
                 p_bar = "▓" * int(pct_f * 10) + "░" * (10 - int(pct_f * 10))
@@ -949,7 +1020,13 @@ class DiziBotManager:
         except Exception:
             pass
 
-        markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Canlı Yenile", callback_data="status_ref")]])
+        # Kontrol Butonları
+        ctrl_row = [InlineKeyboardButton("🔄 Canlı Yenile", callback_data="status_ref")]
+        if active_jobs:
+            ctrl_row.insert(0, InlineKeyboardButton("🛑 Tüm Kuyruğu Temizle", callback_data="cancel_all"))
+        buttons.append(ctrl_row)
+
+        markup = InlineKeyboardMarkup(buttons)
         return text, markup
 
     def _check_disk_space(self):
@@ -972,6 +1049,14 @@ class DiziBotManager:
         title = job["title"]
         season = job["season"]
         episode = job["episode"]
+
+        if db.is_job_cancelled(job_id):
+            logger.info(f"İşlem #{job_id} zaten iptal edilmiş, atlanıyor.")
+            return
+
+        cur_task = asyncio.current_task()
+        if cur_task:
+            ACTIVE_TASKS[job_id] = cur_task
 
         is_movie = (season == 0 and episode == 0) or (season == 0)
         clean_title, _, _ = Downloader.parse_title_season_episode(title)
@@ -1039,6 +1124,10 @@ class DiziBotManager:
         uploaded_ok = False
         try:
             for cand in candidates:
+                if db.is_job_cancelled(job_id):
+                    logger.info(f"İşlem #{job_id} iptal edilmiş, akış döngüsü durduruluyor.")
+                    break
+
                 p_name = cand["plugin"]
                 stream_url = cand["url"]
                 logger.info(f"Denenen Kaynak: [{p_name}] -> {stream_url}")
@@ -1047,6 +1136,8 @@ class DiziBotManager:
                 temp_file = TEMP_DIR / f"job_{job_id}_{safe_title}_{'movie' if is_movie else f'S{season}E{episode}'}.mp4"
                 
                 def prog_cb(pct: float, done_seg: int = 0, tot_seg: int = 0, phase: str = "downloading"):
+                    if db.is_job_cancelled(job_id):
+                        raise asyncio.CancelledError(f"İşlem #{job_id} iptal edildi")
                     LIVE_TRANSFERS[job_id] = {
                         "title": disp_title,
                         "phase": phase,
@@ -1061,6 +1152,9 @@ class DiziBotManager:
                 if not dl_success or not temp_file.exists():
                     logger.warning(f"[{p_name}] İndirme başarısız oldu, sonraki kaynağa geçiliyor...")
                     continue
+
+                if db.is_job_cancelled(job_id):
+                    break
 
                 # Boyut Kontrolü (< 1950 MB) - Aşarsa Otomatik Optimize Et
                 f_size = temp_file.stat().st_size
@@ -1081,6 +1175,9 @@ class DiziBotManager:
                 # Thumbnail Çıkart
                 thumb_path = await Downloader.extract_thumbnail(temp_file)
 
+                if db.is_job_cancelled(job_id):
+                    break
+
                 # Telegram'a Yükle (Canlı İlerleme Takibi)
                 db.update_queue_progress(job_id, "uploading", 0.75)
                 logger.info(f"Telegram Konusuna Yükleniyor: '{disp_title}' (Topic: {topic_id})")
@@ -1089,6 +1186,8 @@ class DiziBotManager:
                 last_db_up = 0.0
 
                 async def upload_prog(current: int, total: int):
+                    if db.is_job_cancelled(job_id):
+                        raise asyncio.CancelledError(f"İşlem #{job_id} iptal edildi")
                     nonlocal last_db_up
                     now = time.time()
                     pct = current / total if total > 0 else 0.0
@@ -1142,6 +1241,8 @@ class DiziBotManager:
                     if not is_movie:
                         asyncio.create_task(self._auto_heal_hook(clean_title, season))
                     break
+                except asyncio.CancelledError:
+                    raise
                 except Exception as upload_err:
                     logger.error(f"Telegram yükleme hatası: {upload_err}")
                 finally:
@@ -1150,9 +1251,19 @@ class DiziBotManager:
                     if thumb_path and thumb_path.exists():
                         thumb_path.unlink(missing_ok=True)
 
-            if not uploaded_ok:
+            if not uploaded_ok and not db.is_job_cancelled(job_id):
                 db.update_queue_progress(job_id, "failed", error_msg="Tüm alternatif akışlar başarısız oldu")
+        except asyncio.CancelledError:
+            logger.info(f"🛑 İşlem #{job_id} ({disp_title}) iptal edildi ve anında durduruldu.")
+            db.cancel_queue_item(job_id)
+            LIVE_TRANSFERS.pop(job_id, None)
+            for p in TEMP_DIR.glob(f"job_{job_id}_*"):
+                try:
+                    p.unlink(missing_ok=True)
+                except Exception:
+                    pass
         finally:
+            ACTIVE_TASKS.pop(job_id, None)
             LIVE_TRANSFERS.pop(job_id, None)
 
     async def _auto_heal_hook(self, series_title: str, season: int):
