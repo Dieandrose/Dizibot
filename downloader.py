@@ -237,8 +237,8 @@ class Downloader:
                     return []
                 episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
                 
-                # Film veya Tekil İçerik Durumu (Bölüm listesi yok veya target_s == 0)
-                if not episodes or target_s == 0:
+                # Film Durumu (target_s == 0)
+                if target_s == 0:
                     try:
                         links = await asyncio.wait_for(local_load_links(p_name, i_url), timeout=8)
                         for l in links:
@@ -255,7 +255,7 @@ class Downloader:
                     except Exception:
                         pass
 
-                    # Episodes içinde tekil bölüm varsa onu da dene
+                    # Episodes içinde tekil film varsa onu da dene
                     if not cand_list and episodes:
                         for ep in episodes:
                             ep_url = ep.get("url", "") if isinstance(ep, dict) else getattr(ep, "url", "")
@@ -276,7 +276,7 @@ class Downloader:
                                 except Exception:
                                     pass
                 else:
-                    # Dizi Durumu (Sezon / Bölüm eşleştirme)
+                    # Dizi Durumu (Kesin Sezon / Bölüm Eşleştirme)
                     for ep in episodes:
                         s_num = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
                         e_num = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
@@ -429,15 +429,18 @@ class Downloader:
 
             # Segmentleri İndir
             async def get_segments(url: str) -> List[str]:
-                r = await session.get(url, headers=headers)
-                if r.status_code != 200:
+                try:
+                    r = await session.get(url, headers=headers, timeout=10.0)
+                    if r.status_code != 200:
+                        return []
+                    seg_urls = []
+                    for ln in r.text.splitlines():
+                        ln = ln.strip()
+                        if ln and not ln.startswith("#"):
+                            seg_urls.append(urllib.parse.urljoin(url, ln))
+                    return seg_urls
+                except Exception:
                     return []
-                seg_urls = []
-                for ln in r.text.splitlines():
-                    ln = ln.strip()
-                    if ln and not ln.startswith("#"):
-                        seg_urls.append(urllib.parse.urljoin(url, ln))
-                return seg_urls
 
             video_segs = await get_segments(video_target_url)
             audio_segs = await get_segments(audio_target_url) if audio_target_url else []
@@ -461,10 +464,10 @@ class Downloader:
                 async def fetch_seg(idx: int, s_url: str):
                     nonlocal done
                     async with sem:
-                        for retry in range(4):
+                        for retry in range(3):
                             try:
-                                res = await session.get(s_url, headers=headers)
-                                if res.status_code == 200:
+                                res = await session.get(s_url, headers=headers, timeout=8.0)
+                                if res.status_code == 200 and len(res.content) > 0:
                                     done += 1
                                     if is_video and progress_cb and total > 0 and done % 10 == 0:
                                         try:
@@ -473,7 +476,7 @@ class Downloader:
                                             progress_cb(done / total)
                                     return idx, res.content
                             except Exception:
-                                await asyncio.sleep(1 + retry)
+                                await asyncio.sleep(0.5 + retry * 0.5)
                         return idx, b""
 
                 with open(dest_file, "wb") as f_out:
@@ -490,6 +493,14 @@ class Downloader:
             await download_seg_list(video_segs, tmp_video_file, is_video=True)
             if audio_segs and tmp_audio_file:
                 await download_seg_list(audio_segs, tmp_audio_file, is_video=False)
+
+            if not tmp_video_file.exists() or tmp_video_file.stat().st_size < 1024 * 100:
+                logger.warning("HLS video dosyası indirilemedi veya geçersiz boyutta.")
+                if tmp_video_file.exists():
+                    tmp_video_file.unlink(missing_ok=True)
+                if tmp_audio_file and tmp_audio_file.exists():
+                    tmp_audio_file.unlink(missing_ok=True)
+                return False
 
             # FFmpeg ile Senkron Birleştirme (Muxing)
             is_audio_aac = False

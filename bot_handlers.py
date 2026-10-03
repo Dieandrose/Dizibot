@@ -932,7 +932,8 @@ class DiziBotManager:
                 stream_url = cand["url"]
                 logger.info(f"Denenen Kaynak: [{p_name}] -> {stream_url}")
 
-                temp_file = TEMP_DIR / f"job_{job_id}_{clean_title}_{'movie' if is_movie else f'S{season}E{episode}'}.mp4"
+                safe_title = re.sub(r'[^a-zA-Z0-9_\-]', '_', clean_title)
+                temp_file = TEMP_DIR / f"job_{job_id}_{safe_title}_{'movie' if is_movie else f'S{season}E{episode}'}.mp4"
                 
                 def prog_cb(pct: float, done_seg: int = 0, tot_seg: int = 0):
                     LIVE_TRANSFERS[job_id] = {
