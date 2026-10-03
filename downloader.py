@@ -175,12 +175,12 @@ class Downloader:
     async def search_all_plugins(cls, query: str) -> List[Dict[str, Any]]:
         """DarkBox eklentilerinde kontrollü, hızlı ve bellek korumalı paralel arama yapar."""
         plugins = cls.get_all_plugin_names()
-        sem = asyncio.Semaphore(12)
+        sem = asyncio.Semaphore(25)
         
         async def _search_plugin(p: str):
             async with sem:
                 try:
-                    res = await asyncio.wait_for(local_search(p, query), timeout=2.5)
+                    res = await asyncio.wait_for(local_search(p, query), timeout=4.0)
                     out = []
                     for item in res:
                         title = item.get("title") if isinstance(item, dict) else (item.title if hasattr(item, "title") else str(item))
@@ -201,7 +201,7 @@ class Downloader:
                     return []
 
         tasks = [asyncio.create_task(_search_plugin(p)) for p in plugins]
-        done, pending = await asyncio.wait(tasks, timeout=4.5)
+        done, pending = await asyncio.wait(tasks, timeout=7.0)
         for t in pending:
             t.cancel()
             

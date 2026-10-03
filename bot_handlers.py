@@ -182,13 +182,13 @@ class DiziBotManager:
 
             SEARCH_CACHE[str(message.from_user.id)] = results
             buttons = []
-            for idx, r in enumerate(results[:15]):
+            for idx, r in enumerate(results[:25]):
                 title = r.get("title", "İçerik")
                 plugin = r.get("plugin_name", "Kaynak")
                 buttons.append([InlineKeyboardButton(f"🎬 {title} [{plugin}]", callback_data=f"sel_res:{idx}")])
 
             keyboard = InlineKeyboardMarkup(buttons)
-            await msg.edit_text(f"🎯 **'{query}'** için bulunan sonuçlar:\nİndirmek istediğiniz içeriği seçin:", reply_markup=keyboard)
+            await msg.edit_text(f"🎯 **'{query}'** için **{len(results)}** kaynak bulundu:\nİndirmek istediğiniz sunucuyu seçin:", reply_markup=keyboard)
 
         # 3. /indir <dizi> <sezon> <bölüm>
         @self.app.on_message(filters.command(["indir", "download"]))
@@ -571,7 +571,10 @@ class DiziBotManager:
                 idx = int(data.split(":")[1])
                 user_cache = SEARCH_CACHE.get(str(user_id), [])
                 if not user_cache or idx >= len(user_cache):
-                    await query.answer("⚠️ Arama sonucu süresi doldu, lütfen tekrar arayın.", show_alert=True)
+                    try:
+                        await query.answer("⚠️ Arama sonucu süresi doldu, lütfen tekrar arayın.", show_alert=True)
+                    except Exception:
+                        pass
                     return
 
                 selected_item = user_cache[idx]
@@ -579,52 +582,64 @@ class DiziBotManager:
                 plugin = selected_item.get("plugin_name", "Kaynak")
                 url = selected_item.get("url", "")
 
-                await query.answer("Detaylar yükleniyor...")
                 try:
-                    detail = await local_load_item(plugin, url)
-                    episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
-                    
-                    # Dizi Kontrolü: Bölüm listesi var ve birden fazla bölüm veya sezon bilgisi içeriyor mu?
-                    is_series = bool(episodes and len(episodes) > 0 and (
-                        len(episodes) > 1 or 
-                        (episodes[0].get("season", 0) if isinstance(episodes[0], dict) else getattr(episodes[0], "season", 0)) > 0 or
-                        (episodes[0].get("episode", 0) if isinstance(episodes[0], dict) else getattr(episodes[0], "episode", 0)) > 1 or
-                        "/dizi/" in url or "/tv/" in url or "diziler" in url
-                    ))
+                    await query.answer("⏳ Detaylar alınıyor...")
+                except Exception:
+                    pass
 
-                    if is_series:
-                        seasons = sorted(set(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1) for ep in episodes))
-                        s_buttons = []
-                        # En üste TÜM SEZONLARI İNDİR butonu
-                        s_buttons.append([InlineKeyboardButton("🔥 TÜM SEZONLARI İNDİR (Tüm Bölümler)", callback_data=f"dl_all_series:{idx}")])
-                        row = []
-                        for s in seasons:
-                            row.append(InlineKeyboardButton(f"{s}. Sezon", callback_data=f"sel_s:{idx}:{s}"))
-                            if len(row) == 3:
-                                s_buttons.append(row)
-                                row = []
-                        if row:
+                detail = None
+                try:
+                    detail = await asyncio.wait_for(local_load_item(plugin, url), timeout=6.0)
+                except Exception as load_err:
+                    logger.warning(f"Plugin {plugin} load_item zaman aşımı/hata: {load_err}")
+
+                episodes = (detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])) if detail else []
+                
+                # Dizi Kontrolü: Bölüm listesi var ve birden fazla bölüm veya sezon bilgisi içeriyor mu?
+                is_series = bool(episodes and len(episodes) > 0 and (
+                    len(episodes) > 1 or 
+                    (episodes[0].get("season", 0) if isinstance(episodes[0], dict) else getattr(episodes[0], "season", 0)) > 0 or
+                    (episodes[0].get("episode", 0) if isinstance(episodes[0], dict) else getattr(episodes[0], "episode", 0)) > 1 or
+                    "/dizi/" in url or "/tv/" in url or "diziler" in url
+                ))
+
+                if is_series:
+                    seasons = sorted(set(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1) for ep in episodes))
+                    s_buttons = []
+                    # En üste TÜM SEZONLARI İNDİR butonu
+                    s_buttons.append([InlineKeyboardButton("🔥 TÜM SEZONLARI İNDİR (Tüm Bölümler)", callback_data=f"dl_all_series:{idx}")])
+                    row = []
+                    for s in seasons:
+                        row.append(InlineKeyboardButton(f"{s}. Sezon", callback_data=f"sel_s:{idx}:{s}"))
+                        if len(row) == 3:
                             s_buttons.append(row)
-                        
-                        # Geri butonu (Arama sonuçlarına dön)
-                        s_buttons.append([InlineKeyboardButton("🔙 Arama Sonuçlarına Dön", callback_data="back_search")])
+                            row = []
+                    if row:
+                        s_buttons.append(row)
+                    
+                    # Geri butonu (Arama sonuçlarına dön)
+                    s_buttons.append([InlineKeyboardButton("🔙 Arama Sonuçlarına Dön", callback_data="back_search")])
 
+                    try:
                         await query.edit_message_text(
-                            f"🎬 **{title}** (Dizi - {len(seasons)} Sezon, {len(episodes)} Bölüm)\nLütfen indirmek istediğiniz seçeneği belirleyin:",
+                            f"🎬 **{title}** [{plugin}]\n📌 **Dizi:** {len(seasons)} Sezon, {len(episodes)} Bölüm\n\nLütfen indirmek istediğiniz seçeneği belirleyin:",
                             reply_markup=InlineKeyboardMarkup(s_buttons)
                         )
-                    else:
-                        # Film veya Tek Parça İçerik -> Filmler Konusuna Aktarılacak
-                        btn = InlineKeyboardMarkup([
-                            [InlineKeyboardButton("📥 FİLMİ İNDİR & YÜKLE", callback_data=f"dl_movie:{idx}")],
-                            [InlineKeyboardButton("🔙 Arama Sonuçlarına Dön", callback_data="back_search")]
-                        ])
+                    except Exception as e:
+                        logger.debug(f"Mesaj düzenleme hatası: {e}")
+                else:
+                    # Film veya Tek Parça İçerik -> Filmler Konusuna Aktarılacak
+                    btn = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("📥 FİLMİ İNDİR & YÜKLE", callback_data=f"dl_movie:{idx}")],
+                        [InlineKeyboardButton("🔙 Arama Sonuçlarına Dön", callback_data="back_search")]
+                    ])
+                    try:
                         await query.edit_message_text(
-                            f"🎬 **{title}**\n📌 **Tür:** Film / Tek Parça\n\nBu içerik doğrudan **'🎬 Filmler'** konusuna yüklenecektir.",
+                            f"🎬 **{title}** [{plugin}]\n📌 **Tür:** Film / Tek Parça\n\nBu içerik doğrudan **'🎬 Filmler'** konusuna yüklenecektir.",
                             reply_markup=btn
                         )
-                except Exception as e:
-                    await query.edit_message_text(f"❌ Detay yüklenemedi: {e}")
+                    except Exception as e:
+                        logger.debug(f"Mesaj düzenleme hatası: {e}")
 
             # 1.1 Tüm Sezonları İndirme Tetikleme
             elif data.startswith("dl_all_series:"):
