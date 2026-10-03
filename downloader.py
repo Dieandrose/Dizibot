@@ -523,21 +523,27 @@ class Downloader:
                     if sub_tr_url.endswith(".m3u8") or ".m3u8" in sub_tr_url:
                         sub_segs = await get_segments(sub_tr_url)
                         if sub_segs:
-                            vtt_parts = ["WEBVTT\n\n"]
+                            vtt_parts = []
                             for s_url in sub_segs:
                                 try:
                                     s_res = await session.get(s_url, headers=headers, timeout=6.0)
                                     if s_res.status_code == 200 and s_res.text:
-                                        clean_txt = s_res.text.replace("WEBVTT", "").strip()
+                                        clean_txt = s_res.text.strip()
                                         if clean_txt:
-                                            vtt_parts.append(clean_txt + "\n\n")
+                                            vtt_parts.append(clean_txt)
                                 except Exception:
                                     pass
-                            tmp_sub_file.write_text("".join(vtt_parts), encoding="utf-8")
+                            full_vtt = "\n\n".join(vtt_parts)
+                            if not full_vtt.startswith("WEBVTT"):
+                                full_vtt = "WEBVTT\n\n" + full_vtt
+                            tmp_sub_file.write_text(full_vtt, encoding="utf-8")
                     else:
                         sub_res = await session.get(sub_tr_url, headers=headers, timeout=8.0)
                         if sub_res.status_code == 200 and len(sub_res.text) > 10:
-                            tmp_sub_file.write_text(sub_res.text, encoding="utf-8")
+                            clean_text = sub_res.text
+                            if not clean_text.startswith("WEBVTT"):
+                                clean_text = "WEBVTT\n\n" + clean_text
+                            tmp_sub_file.write_text(clean_text, encoding="utf-8")
                 except Exception as sub_e:
                     logger.debug(f"Altyazı indirme atlandı: {sub_e}")
                     tmp_sub_file = None
@@ -670,6 +676,37 @@ class Downloader:
 
             proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
             _, err = await proc.communicate()
+
+            # Eğer altyazılı birleştirme başarısız olduysa, sadece video + ses olarak birleştirmeyi dene
+            if not (output_path.exists() and output_path.stat().st_size > 1024 * 1024) and has_sub:
+                logger.warning("Altyazılı birleştirme başarısız oldu, sadece video+ses olarak birleştiriliyor...")
+                cmd_fallback = [
+                    "ffmpeg", "-y", "-threads", "0", "-fflags", "+genpts+discardcorrupt",
+                    "-i", str(tmp_video_file)
+                ]
+                fb_map = ["-map", "0:v:0"]
+                fb_in = 1
+                if tmp_audio_tr_file and tmp_audio_tr_file.exists():
+                    cmd_fallback.extend(["-i", str(tmp_audio_tr_file)])
+                    fb_map.extend(["-map", f"{fb_in}:a:0"])
+                    fb_in += 1
+                if tmp_audio_en_file and tmp_audio_en_file.exists():
+                    cmd_fallback.extend(["-i", str(tmp_audio_en_file)])
+                    fb_map.extend(["-map", f"{fb_in}:a:0"])
+                    fb_in += 1
+                if fb_in == 1:
+                    fb_map.extend(["-map", "0:a:0?"])
+                cmd_fallback.extend(fb_map)
+                cmd_fallback.extend([
+                    "-c:v", "copy", "-c:a", "copy", "-bsf:a", "aac_adtstoasc",
+                    "-avoid_negative_ts", "make_zero", "-shortest", "-movflags", "+faststart",
+                    str(output_path)
+                ])
+                proc_fb = await asyncio.create_subprocess_exec(*cmd_fallback, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                _, err_fb = await proc_fb.communicate()
+                if err_fb:
+                    err = err_fb
+                has_sub = False
 
             # Geçici dosyaları temizle
             if tmp_video_file.exists():
