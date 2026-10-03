@@ -488,11 +488,6 @@ class Downloader:
                                 if not audio_en_url:
                                     audio_en_url = u
 
-                # Eğer çoklu ses etiketleri var ancak Türkçe dublaj yoksa alternatif kaynağa geç
-                if has_audio_tags and not audio_tr_url:
-                    logger.warning("Bu HLS kaynağında Türkçe Dublaj ses kanalı bulunamadı, sonraki dublajlı kaynağa geçiliyor...")
-                    return {"success": False}
-
                 # 2. Açılıp-Kapanabilir Türkçe Altyazı Akışı (Soft-Sub) Tespiti
                 for l in lines:
                     if l.startswith("#EXT-X-MEDIA:TYPE=SUBTITLES"):
@@ -697,22 +692,9 @@ class Downloader:
             audio_track_count = 0
             tr_offset = 0.0
 
-            # 1. Ses Kanalı: Türkçe Dublaj (Otomatik Ofset / Senkron Düzeltmeli)
+            # 1. Ses Kanalı: Türkçe Dublaj
             if tmp_audio_tr_file and tmp_audio_tr_file.exists() and tmp_audio_tr_file.stat().st_size > 0:
-                if tmp_audio_en_file and tmp_audio_en_file.exists() and tmp_audio_en_file.stat().st_size > 0:
-                    tr_offset = await cls.detect_audio_offset(tmp_audio_tr_file, tmp_audio_en_file)
-                elif tmp_video_file and tmp_video_file.exists():
-                    tr_offset = await cls.detect_audio_offset(tmp_audio_tr_file, tmp_video_file)
-
-                if tr_offset > 0.25:
-                    logger.info(f"🎙️ Otomatik Ses Senkronizasyonu: Türkçe seste +{tr_offset:.2f} saniye gecikme tespit edildi, kırpılıyor...")
-                    cmd.extend(["-ss", f"{tr_offset:.3f}", "-i", str(tmp_audio_tr_file)])
-                elif tr_offset < -0.25:
-                    logger.info(f"🎙️ Otomatik Ses Senkronizasyonu: Türkçe ses {abs(tr_offset):.2f} saniye önde, ofset ekleniyor...")
-                    cmd.extend(["-itsoffset", f"{abs(tr_offset):.3f}", "-i", str(tmp_audio_tr_file)])
-                else:
-                    cmd.extend(["-i", str(tmp_audio_tr_file)])
-
+                cmd.extend(["-i", str(tmp_audio_tr_file)])
                 map_args.extend([
                     "-map", f"{input_idx}:a:0",
                     f"-metadata:s:a:{audio_track_count}", "title=Türkçe Dublaj",
@@ -773,12 +755,7 @@ class Downloader:
                 fb_map = ["-map", "0:v:0"]
                 fb_in = 1
                 if tmp_audio_tr_file and tmp_audio_tr_file.exists():
-                    if tr_offset > 0.25:
-                        cmd_fallback.extend(["-ss", f"{tr_offset:.3f}", "-i", str(tmp_audio_tr_file)])
-                    elif tr_offset < -0.25:
-                        cmd_fallback.extend(["-itsoffset", f"{abs(tr_offset):.3f}", "-i", str(tmp_audio_tr_file)])
-                    else:
-                        cmd_fallback.extend(["-i", str(tmp_audio_tr_file)])
+                    cmd_fallback.extend(["-i", str(tmp_audio_tr_file)])
                     fb_map.extend(["-map", f"{fb_in}:a:0"])
                     fb_in += 1
                 if tmp_audio_en_file and tmp_audio_en_file.exists():
