@@ -330,21 +330,21 @@ class Downloader:
                 candidates.extend(r)
 
         all_plugins = cls.get_all_plugin_names()
-        # Eklenti önceliği ve dublaj kalitesine göre sırala
+        # Dublaj skoru ve eklenti önceliğine göre sırala
         def dublaj_priority_key(c):
             p = c.get("plugin", "")
             name = (c.get("name") or "").lower()
             title = (c.get("title") or "").lower()
             
-            # Dizi65, SineWix, RecTV stüdyo master akışları içerir
-            score = 80 if p in ["Dizi65", "SineWix", "RecTV"] else 50
-            if any(k in name or k in title for k in ["dublaj", "dub", "tr dub", "türkçe dublaj", "türkçe"]):
+            # Stüdyo master kaynakları (Dizi65, SineWix, RecTV) kaliteli ses/görüntüye sahiptir
+            score = 70 if p in ["Dizi65", "SineWix", "RecTV"] else 40
+            if any(k in name or k in title for k in ["dublaj", "dub", "tr dub", "türkçe dublaj", "türkçe", "tr"]):
                 score = 100
-            elif any(k in name or k in title for k in ["altyazı", "sub", "eng", "orijinal"]):
+            elif any(k in name or k in title for k in ["altyazı", "sub", "eng", "orijinal", "english"]):
                 score = 10
                 
             p_idx = all_plugins.index(p) if p in all_plugins else 999
-            return (p_idx, -score)
+            return (-score, p_idx)
 
         candidates.sort(key=dublaj_priority_key)
         return candidates
@@ -419,8 +419,8 @@ class Downloader:
                                 if not audio_en_url:
                                     audio_en_url = u
 
-                # Eğer çoklu ses etiketleri var ancak hiçbir uygun ses yoksa alternatif kaynağa geç
-                if has_audio_tags and not audio_tr_url and not audio_en_url:
+                # Eğer çoklu ses etiketleri var ancak Türkçe dublaj yoksa alternatif kaynağa geç
+                if has_audio_tags and not audio_tr_url:
                     logger.warning("Bu HLS kaynağında Türkçe Dublaj ses kanalı bulunamadı, sonraki dublajlı kaynağa geçiliyor...")
                     return {"success": False}
 
