@@ -588,6 +588,9 @@ class DiziBotManager:
                                 row = []
                         if row:
                             s_buttons.append(row)
+                        
+                        # Geri butonu (Arama sonuçlarına dön)
+                        s_buttons.append([InlineKeyboardButton("🔙 Arama Sonuçlarına Dön", callback_data="back_search")])
 
                         await query.edit_message_text(
                             f"🎬 **{title}** (Dizi - {len(seasons)} Sezon, {len(episodes)} Bölüm)\nLütfen indirmek istediğiniz seçeneği belirleyin:",
@@ -595,9 +598,10 @@ class DiziBotManager:
                         )
                     else:
                         # Film veya Tek Parça İçerik -> Filmler Konusuna Aktarılacak
-                        btn = InlineKeyboardMarkup([[
-                            InlineKeyboardButton("📥 FİLMİ İNDİR & YÜKLE", callback_data=f"dl_movie:{idx}")
-                        ]])
+                        btn = InlineKeyboardMarkup([
+                            [InlineKeyboardButton("📥 FİLMİ İNDİR & YÜKLE", callback_data=f"dl_movie:{idx}")],
+                            [InlineKeyboardButton("🔙 Arama Sonuçlarına Dön", callback_data="back_search")]
+                        ])
                         await query.edit_message_text(
                             f"🎬 **{title}**\n📌 **Tür:** Film / Tek Parça\n\nBu içerik doğrudan **'🎬 Filmler'** konusuna yüklenecektir.",
                             reply_markup=btn
@@ -688,10 +692,27 @@ class DiziBotManager:
                 if row:
                     ep_buttons.append(row)
 
+                # Geri butonu (Sezonlara dön)
+                ep_buttons.append([InlineKeyboardButton("🔙 Sezon Seçimine Dön", callback_data=f"sel_res:{idx}")])
+
                 await query.edit_message_text(
                     f"🎬 **{title}** - **{season}. Sezon**\nSezonun tamamını tek tıkla indirebilir veya tekil bölüm seçebilirsiniz:",
                     reply_markup=InlineKeyboardMarkup(ep_buttons)
                 )
+
+            # 2.1 Arama Sonuçlarına Geri Dön
+            elif data == "back_search":
+                user_cache = SEARCH_CACHE.get(str(user_id), [])
+                if not user_cache:
+                    await query.answer("⚠️ Arama sonucu süresi doldu, lütfen tekrar arayın.", show_alert=True)
+                    return
+                buttons = []
+                for i_idx, r in enumerate(user_cache[:15]):
+                    t_title = r.get("title", "İçerik")
+                    p_name = r.get("plugin_name", "Kaynak")
+                    buttons.append([InlineKeyboardButton(f"🎬 {t_title} [{p_name}]", callback_data=f"sel_res:{i_idx}")])
+                keyboard = InlineKeyboardMarkup(buttons)
+                await query.edit_message_text("🎯 **Arama Sonuçları:**\nİndirmek istediğiniz içeriği seçin:", reply_markup=keyboard)
 
             # 3. Bölüm İndirme Tetikleme
             elif data.startswith("dl_ep:"):
