@@ -522,6 +522,15 @@ class Downloader:
                 except Exception:
                     pass
 
+            if progress_cb:
+                try:
+                    progress_cb(1.0, len(video_segs), len(video_segs), phase="muxing")
+                except TypeError:
+                    try:
+                        progress_cb(1.0)
+                    except Exception:
+                        pass
+
             # FFmpeg ile Hızlı & Tam Senkron Birleştirme (Frame-Accurate Audio/Video Synchronization)
             cmd = [
                 "ffmpeg", "-y",

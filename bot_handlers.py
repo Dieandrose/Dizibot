@@ -884,6 +884,14 @@ class DiziBotManager:
                     f"• İşlem ID: `#{job_id}`\n\n"
                 )
                 live_shown += 1
+            elif t_info and t_info.get("phase") == "muxing":
+                text += (
+                    f"🎬 **{disp_title}**\n"
+                    f"• Aşama: ⚙️ `SES & VİDEO SENKRONİZASYONU` (FFmpeg)\n"
+                    f"• Durum: `🔄 İndirme tamamlandı, ses ve video kayıpsız birleştiriliyor...`\n"
+                    f"• İşlem ID: `#{job_id}`\n\n"
+                )
+                live_shown += 1
             elif t_info and t_info.get("phase") == "downloading":
                 pct_f = min(1.0, max(0.0, float(t_info.get("progress") or p_val)))
                 pct = int(pct_f * 100)
@@ -1017,16 +1025,16 @@ class DiziBotManager:
                 safe_title = re.sub(r'[^a-zA-Z0-9_\-]', '_', clean_title)
                 temp_file = TEMP_DIR / f"job_{job_id}_{safe_title}_{'movie' if is_movie else f'S{season}E{episode}'}.mp4"
                 
-                def prog_cb(pct: float, done_seg: int = 0, tot_seg: int = 0):
+                def prog_cb(pct: float, done_seg: int = 0, tot_seg: int = 0, phase: str = "downloading"):
                     LIVE_TRANSFERS[job_id] = {
                         "title": disp_title,
-                        "phase": "downloading",
+                        "phase": phase,
                         "progress": pct,
                         "current_seg": done_seg,
                         "total_seg": tot_seg,
                         "updated_at": time.time()
                     }
-                    db.update_queue_progress(job_id, "downloading", pct * 0.7)
+                    db.update_queue_progress(job_id, "downloading", 0.73 if phase == "muxing" else pct * 0.7)
 
                 dl_success = await Downloader.download_hls_stream(stream_url, temp_file, progress_cb=prog_cb)
                 if not dl_success or not temp_file.exists():
