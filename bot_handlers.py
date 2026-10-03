@@ -758,9 +758,70 @@ class DiziBotManager:
 
                 clean_title, s, e = Downloader.parse_title_season_episode(req["query"])
                 db.update_request_status(req_id, "approved", admin_id=user_id)
-                job_id = db.add_to_queue(title=clean_title, season=s, episode=e, priority=3)
 
-                await query.edit_message_text(f"✅ **İstek `#{req_id}` Onaylandı & Kuyruğa Alındı!** (İşlem ID: `{job_id}`)")
+                # Sezon tespiti kontrolü
+                season_match = re.search(r"(\d+)\s*\.?\s*sezon", req["query"], re.IGNORECASE)
+                has_explicit_ep = bool(re.search(r"(\d+)\s*\.?\s*bölüm|s\d+e\d+|e\d+", req["query"], re.IGNORECASE))
+
+                if season_match and not has_explicit_ep:
+                    target_s = int(season_match.group(1))
+                    results = await Downloader.search_all_plugins(clean_title)
+                    queued_count = 0
+                    if results:
+                        item = results[0]
+                        detail = await local_load_item(item.get("plugin_name", ""), item.get("url", ""))
+                        episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
+                        episodes.sort(key=lambda ep: (
+                            ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1),
+                            ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                        ))
+                        for ep in episodes:
+                            s_num = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
+                            e_num = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                            if s_num == target_s:
+                                db.add_to_queue(title=clean_title, season=s_num, episode=e_num, priority=3)
+                                queued_count += 1
+                    if queued_count > 0:
+                        await query.edit_message_text(f"✅ **İstek `#{req_id}` Onaylandı!** '{clean_title} {target_s}. Sezon' ({queued_count} bölüm) kuyruğa alındı.")
+                    else:
+                        job_id = db.add_to_queue(title=clean_title, season=target_s, episode=1, priority=3)
+                        await query.edit_message_text(f"✅ **İstek `#{req_id}` Onaylandı!** (İşlem ID: `{job_id}`)")
+                elif not has_explicit_ep and not season_match:
+                    results = await Downloader.search_all_plugins(clean_title)
+                    is_series_found = False
+                    item = None
+                    episodes = []
+                    if results:
+                        try:
+                            item = results[0]
+                            detail = await local_load_item(item.get("plugin_name", ""), item.get("url", ""))
+                            episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
+                            if episodes and (len(episodes) > 1 or "/dizi/" in item.get("url", "")):
+                                is_series_found = True
+                        except Exception:
+                            pass
+                    if is_series_found and episodes:
+                        episodes.sort(key=lambda ep: (
+                            ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1),
+                            ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                        ))
+                        added = 0
+                        seasons_set = set()
+                        p_name = item.get("plugin_name", "") if item else ""
+                        i_url = item.get("url", "") if item else ""
+                        for ep in episodes:
+                            s_num = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
+                            e_num = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                            db.add_to_queue(title=clean_title, season=s_num, episode=e_num, plugin_name=p_name, item_url=i_url, priority=2)
+                            added += 1
+                            seasons_set.add(s_num)
+                        await query.edit_message_text(f"✅ **İstek `#{req_id}` Onaylandı!** '{clean_title}' dizisinin tüm sezonları ({len(seasons_set)} sezon, {added} bölüm) kuyruğa alındı.")
+                    else:
+                        job_id = db.add_to_queue(title=clean_title, season=0, episode=0, priority=3)
+                        await query.edit_message_text(f"✅ **İstek `#{req_id}` Onaylandı!** '{clean_title}' (Film) kuyruğa alındı. (İşlem ID: `{job_id}`)")
+                else:
+                    job_id = db.add_to_queue(title=clean_title, season=s, episode=e, priority=3)
+                    await query.edit_message_text(f"✅ **İstek `#{req_id}` Onaylandı & Kuyruğa Alındı!** (İşlem ID: `{job_id}`)")
                 if req["user_id"]:
                     try:
                         await self.app.send_message(
