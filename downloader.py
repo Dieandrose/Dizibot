@@ -354,9 +354,10 @@ class Downloader:
         cls, 
         stream_url: str, 
         output_path: Path, 
-        progress_cb: Optional[Callable[..., None]] = None
-    ) -> bool:
-        """HLS akışını video + Türkçe ses parçalarıyla tam senkronlu olarak indirir."""
+        progress_cb: Optional[Callable[..., None]] = None,
+        extra_subtitles: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
+        """HLS akışını video + Türkçe/Orijinal ses kanalları ve açılıp-kapanabilir Türkçe altyazı (Soft-Sub) ile indirir."""
         custom_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         referer_url = stream_url
         if stream_url.startswith("/proxy/video") or "proxy/video?url=" in stream_url:
@@ -385,22 +386,23 @@ class Downloader:
                 resp = await session.get(stream_url, headers=headers)
                 if resp.status_code != 200:
                     logger.warning(f"HLS Playlist 200 dönmedi: {resp.status_code}")
-                    return False
+                    return {"success": False}
             except Exception as e:
                 logger.error(f"HLS Playlist istek hatası: {e}")
-                return False
+                return {"success": False}
 
             manifest_text = resp.text
             lines = [l.strip() for l in manifest_text.splitlines() if l.strip()]
 
             video_target_url = None
-            audio_target_url = None
+            audio_tr_url = None
+            audio_en_url = None
+            sub_tr_url = None
 
             # Master Playlist kontrolü
-            if any("#EXT-X-STREAM-INF" in l for l in lines) or any("#EXT-X-MEDIA:TYPE=AUDIO" in l for l in lines):
-                # 1. Türkçe Dublaj Ses Akışı Tespiti
+            if any("#EXT-X-STREAM-INF" in l for l in lines) or any("#EXT-X-MEDIA:TYPE=" in l for l in lines):
+                # 1. Türkçe Dublaj & İngilizce/Orijinal Ses Akışları Tespiti
                 has_audio_tags = any(l.startswith("#EXT-X-MEDIA:TYPE=AUDIO") for l in lines)
-                turkish_audio_found = False
                 for l in lines:
                     if l.startswith("#EXT-X-MEDIA:TYPE=AUDIO"):
                         m_uri = re.search(r'URI=["\']?([^"\',]+)["\']?', l)
@@ -411,17 +413,32 @@ class Downloader:
                             name = (m_name.group(1) if m_name else "").lower()
                             lang = (m_lang.group(1) if m_lang else "").lower()
                             if any(x in name or x in lang for x in ["tur", "türk", "turkish", "tr", "dublaj"]):
-                                audio_target_url = u
-                                turkish_audio_found = True
-                                break
+                                if not audio_tr_url:
+                                    audio_tr_url = u
+                            elif any(x in name or x in lang for x in ["eng", "ing", "english", "original", "orijinal", "en"]):
+                                if not audio_en_url:
+                                    audio_en_url = u
 
-                # Eğer çoklu ses etiketleri var ancak Türkçe dublaj yoksa (yalnızca orijinal/yabancı ses varsa)
-                # Türkçe dublajlı alternatif kaynaklara geçebilmek için bu kaynağı atla
-                if has_audio_tags and not turkish_audio_found:
+                # Eğer çoklu ses etiketleri var ancak hiçbir uygun ses yoksa alternatif kaynağa geç
+                if has_audio_tags and not audio_tr_url and not audio_en_url:
                     logger.warning("Bu HLS kaynağında Türkçe Dublaj ses kanalı bulunamadı, sonraki dublajlı kaynağa geçiliyor...")
-                    return False
+                    return {"success": False}
 
-                # 2. 720p / HD (< 2GB) Video Akışı Tespiti (Öncelikli 720p / Optimum Bitrate)
+                # 2. Açılıp-Kapanabilir Türkçe Altyazı Akışı (Soft-Sub) Tespiti
+                for l in lines:
+                    if l.startswith("#EXT-X-MEDIA:TYPE=SUBTITLES"):
+                        m_uri = re.search(r'URI=["\']?([^"\',]+)["\']?', l)
+                        m_name = re.search(r'NAME=["\']?([^"\',]+)["\']?', l)
+                        m_lang = re.search(r'LANGUAGE=["\']?([^"\',]+)["\']?', l)
+                        if m_uri:
+                            u = urllib.parse.urljoin(stream_url, m_uri.group(1))
+                            name = (m_name.group(1) if m_name else "").lower()
+                            lang = (m_lang.group(1) if m_lang else "").lower()
+                            if any(x in name or x in lang for x in ["tur", "türk", "turkish", "tr"]):
+                                if not sub_tr_url:
+                                    sub_tr_url = u
+
+                # 3. 720p / HD (< 2GB) Video Akışı Tespiti (Öncelikli 720p / Optimum Bitrate)
                 variants = []
                 for i, l in enumerate(lines):
                     if l.startswith("#EXT-X-STREAM-INF"):
@@ -431,7 +448,6 @@ class Downloader:
                         bw = int(bw_m.group(1)) if bw_m else 0
                         h = int(res_m.group(2)) if res_m else (int(name_m.group(1)) if name_m else 0)
                         
-                        # Bitrate'e göre yükseklik tahmini
                         if h == 0:
                             if 1000000 <= bw <= 2400000:
                                 h = 720
@@ -447,24 +463,30 @@ class Downloader:
                                 break
 
                 if variants:
-                    # 1. Tam 720p seç
                     pref_720 = [v for v in variants if v[0] == 720]
                     if pref_720:
                         pref_720.sort(key=lambda x: x[1])
                         video_target_url = pref_720[0][2]
                     else:
-                        # 2. 480p - 720p arası HD seç
                         under_720 = [v for v in variants if 480 <= v[0] < 720]
                         if under_720:
                             under_720.sort(key=lambda x: x[0], reverse=True)
                             video_target_url = under_720[0][2]
                         else:
-                            # 3. Yalnızca 1080p varsa en düşük bitrate'lisini seç (2GB'ı aşmaması için)
                             variants.sort(key=lambda x: x[1])
                             video_target_url = variants[0][2]
 
             if not video_target_url:
                 video_target_url = stream_url
+
+            # Eğer HLS'de altyazı yoksa harici altyazı listesini kontrol et
+            if not sub_tr_url and extra_subtitles:
+                for s in extra_subtitles:
+                    s_lang = (s.get("language") or s.get("lang") or s.get("name") or "").lower()
+                    s_url = s.get("url", "")
+                    if s_url and any(x in s_lang for x in ["tur", "türk", "turkish", "tr"]):
+                        sub_tr_url = urllib.parse.urljoin(stream_url, s_url)
+                        break
 
             # Segmentleri İndir
             async def get_segments(url: str) -> List[str]:
@@ -482,14 +504,43 @@ class Downloader:
                     return []
 
             video_segs = await get_segments(video_target_url)
-            audio_segs = await get_segments(audio_target_url) if audio_target_url else []
+            audio_tr_segs = await get_segments(audio_tr_url) if audio_tr_url else []
+            audio_en_segs = await get_segments(audio_en_url) if audio_en_url else []
 
             if not video_segs:
                 logger.warning("HLS video segmentleri bulunamadı.")
-                return False
+                return {"success": False}
 
             tmp_video_file = output_path.with_suffix(".vraw.ts")
-            tmp_audio_file = output_path.with_suffix(".araw.ts") if audio_segs else None
+            tmp_audio_tr_file = output_path.with_suffix(".atr.ts") if audio_tr_segs else None
+            tmp_audio_en_file = output_path.with_suffix(".aen.ts") if audio_en_segs else None
+            tmp_sub_file = None
+
+            # Altyazı Dosyasını İndir
+            if sub_tr_url:
+                try:
+                    tmp_sub_file = output_path.with_suffix(".tr.vtt")
+                    if sub_tr_url.endswith(".m3u8") or ".m3u8" in sub_tr_url:
+                        sub_segs = await get_segments(sub_tr_url)
+                        if sub_segs:
+                            vtt_parts = ["WEBVTT\n\n"]
+                            for s_url in sub_segs:
+                                try:
+                                    s_res = await session.get(s_url, headers=headers, timeout=6.0)
+                                    if s_res.status_code == 200 and s_res.text:
+                                        clean_txt = s_res.text.replace("WEBVTT", "").strip()
+                                        if clean_txt:
+                                            vtt_parts.append(clean_txt + "\n\n")
+                                except Exception:
+                                    pass
+                            tmp_sub_file.write_text("".join(vtt_parts), encoding="utf-8")
+                    else:
+                        sub_res = await session.get(sub_tr_url, headers=headers, timeout=8.0)
+                        if sub_res.status_code == 200 and len(sub_res.text) > 10:
+                            tmp_sub_file.write_text(sub_res.text, encoding="utf-8")
+                except Exception as sub_e:
+                    logger.debug(f"Altyazı indirme atlandı: {sub_e}")
+                    tmp_sub_file = None
 
             async def download_seg_list(seg_list: List[str], dest_file: Path, is_video: bool = True):
                 total = len(seg_list)
@@ -528,35 +579,24 @@ class Downloader:
                             if chunk:
                                 f_out.write(chunk)
 
-            logger.info(f"HLS İndiriliyor: Video={len(video_segs)} parça, Ses={len(audio_segs)} parça...")
+            logger.info(f"HLS İndiriliyor: Video={len(video_segs)} parça, Ses(TR)={len(audio_tr_segs)} parça, Ses(EN)={len(audio_en_segs)} parça...")
             await download_seg_list(video_segs, tmp_video_file, is_video=True)
-            if audio_segs and tmp_audio_file:
-                await download_seg_list(audio_segs, tmp_audio_file, is_video=False)
+            if audio_tr_segs and tmp_audio_tr_file:
+                await download_seg_list(audio_tr_segs, tmp_audio_tr_file, is_video=False)
+            if audio_en_segs and tmp_audio_en_file:
+                await download_seg_list(audio_en_segs, tmp_audio_en_file, is_video=False)
 
             if not tmp_video_file.exists() or tmp_video_file.stat().st_size < 1024 * 100:
                 logger.warning("HLS video dosyası indirilemedi veya geçersiz boyutta.")
                 if tmp_video_file.exists():
                     tmp_video_file.unlink(missing_ok=True)
-                if tmp_audio_file and tmp_audio_file.exists():
-                    tmp_audio_file.unlink(missing_ok=True)
-                return False
-
-            # FFmpeg ile Senkron Birleştirme (Muxing)
-            is_audio_aac = False
-            if tmp_audio_file and tmp_audio_file.exists() and tmp_audio_file.stat().st_size > 0:
-                # Audio codec kontrolü
-                try:
-                    p_probe = await asyncio.create_subprocess_exec(
-                        "ffprobe", "-v", "error", "-select_streams", "a:0",
-                        "-show_entries", "stream=codec_name", "-of", "default=noprint_wrappers=1:nokey=1",
-                        str(tmp_audio_file),
-                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-                    )
-                    out, _ = await p_probe.communicate()
-                    if b"aac" in out.lower():
-                        is_audio_aac = True
-                except Exception:
-                    pass
+                if tmp_audio_tr_file and tmp_audio_tr_file.exists():
+                    tmp_audio_tr_file.unlink(missing_ok=True)
+                if tmp_audio_en_file and tmp_audio_en_file.exists():
+                    tmp_audio_en_file.unlink(missing_ok=True)
+                if tmp_sub_file and tmp_sub_file.exists():
+                    tmp_sub_file.unlink(missing_ok=True)
+                return {"success": False}
 
             if progress_cb:
                 try:
@@ -567,35 +607,66 @@ class Downloader:
                     except Exception:
                         pass
 
-            # FFmpeg ile Ultra Hızlı & Kayıpsız Akış Kopyalama (Instant Lossless Muxing - 1-2 sn)
+            # FFmpeg ile Ultra Hızlı Çoklu Ses & Altyazı Birleştirme (Instant Stream Copy - 1-2 sn)
             cmd = [
                 "ffmpeg", "-y",
                 "-threads", "0",
                 "-fflags", "+genpts+discardcorrupt",
                 "-i", str(tmp_video_file)
             ]
-            if tmp_audio_file and tmp_audio_file.exists() and tmp_audio_file.stat().st_size > 0:
-                cmd.extend([
-                    "-i", str(tmp_audio_file),
-                    "-map", "0:v:0",
-                    "-map", "1:a:0",
-                    "-c:v", "copy",
-                    "-c:a", "copy",
-                    "-bsf:a", "aac_adtstoasc",
-                    "-avoid_negative_ts", "make_zero",
-                    "-shortest",
-                    "-movflags", "+faststart",
-                    str(output_path)
+
+            input_idx = 1
+            map_args = ["-map", "0:v:0"]
+            audio_track_count = 0
+
+            # 1. Ses Kanalı: Türkçe Dublaj
+            if tmp_audio_tr_file and tmp_audio_tr_file.exists() and tmp_audio_tr_file.stat().st_size > 0:
+                cmd.extend(["-i", str(tmp_audio_tr_file)])
+                map_args.extend([
+                    "-map", f"{input_idx}:a:0",
+                    f"-metadata:s:a:{audio_track_count}", "title=Türkçe Dublaj",
+                    f"-metadata:s:a:{audio_track_count}", "language=tur"
                 ])
-            else:
-                cmd.extend([
-                    "-map", "0:v:0",
-                    "-map", "0:a:0?",
-                    "-c", "copy",
-                    "-avoid_negative_ts", "make_zero",
-                    "-movflags", "+faststart",
-                    str(output_path)
+                input_idx += 1
+                audio_track_count += 1
+
+            # 2. Ses Kanalı: İngilizce / Orijinal
+            if tmp_audio_en_file and tmp_audio_en_file.exists() and tmp_audio_en_file.stat().st_size > 0:
+                cmd.extend(["-i", str(tmp_audio_en_file)])
+                map_args.extend([
+                    "-map", f"{input_idx}:a:0",
+                    f"-metadata:s:a:{audio_track_count}", "title=İngilizce (Orijinal)",
+                    f"-metadata:s:a:{audio_track_count}", "language=eng"
                 ])
+                input_idx += 1
+                audio_track_count += 1
+
+            if audio_track_count == 0:
+                map_args.extend(["-map", "0:a:0?"])
+
+            # 3. Altyazı Kanalı: Açılıp-Kapanabilir Türkçe Soft-Sub
+            has_sub = False
+            if tmp_sub_file and tmp_sub_file.exists() and tmp_sub_file.stat().st_size > 20:
+                cmd.extend(["-i", str(tmp_sub_file)])
+                map_args.extend([
+                    "-map", f"{input_idx}:s:0?",
+                    "-c:s", "mov_text",
+                    "-metadata:s:s:0", "title=Türkçe Altyazı",
+                    "-metadata:s:s:0", "language=tur"
+                ])
+                input_idx += 1
+                has_sub = True
+
+            cmd.extend(map_args)
+            cmd.extend([
+                "-c:v", "copy",
+                "-c:a", "copy",
+                "-bsf:a", "aac_adtstoasc",
+                "-avoid_negative_ts", "make_zero",
+                "-shortest",
+                "-movflags", "+faststart",
+                str(output_path)
+            ])
 
             proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
             _, err = await proc.communicate()
@@ -603,14 +674,24 @@ class Downloader:
             # Geçici dosyaları temizle
             if tmp_video_file.exists():
                 tmp_video_file.unlink(missing_ok=True)
-            if tmp_audio_file and tmp_audio_file.exists():
-                tmp_audio_file.unlink(missing_ok=True)
+            if tmp_audio_tr_file and tmp_audio_tr_file.exists():
+                tmp_audio_tr_file.unlink(missing_ok=True)
+            if tmp_audio_en_file and tmp_audio_en_file.exists():
+                tmp_audio_en_file.unlink(missing_ok=True)
+            if tmp_sub_file and tmp_sub_file.exists():
+                tmp_sub_file.unlink(missing_ok=True)
 
             if not (output_path.exists() and output_path.stat().st_size > 1024 * 1024):
                 if err:
                     logger.error(f"FFmpeg birleştirme hatası: {err.decode('utf-8', errors='ignore')[-300:]}")
-                return False
-            return True
+                return {"success": False}
+
+            return {
+                "success": True,
+                "audio_track_count": max(1, audio_track_count),
+                "has_multi_audio": audio_track_count >= 2,
+                "has_subtitles": has_sub
+            }
 
     @classmethod
     async def extract_thumbnail(cls, video_path: Path) -> Optional[Path]:

@@ -13,41 +13,46 @@ DarkBox eklenti ekosistemindeki 50+ kaynağı (Dizi65, DizipalX, RecTV, Vizyona,
 - **Seçili Sezonu İndir (`📥 X. SEZONU İNDİR`):** İlgili sezonun tüm bölümlerini tek tıkla indirir veya altındaki butonlardan tekil bölüm seçimi sunar.
 - **Film / Dizi Ayrımı:** Filmleri otomatik algılayarak tekil **`🎬 Filmler`** konusuna yönlendirir; başlıklardan gereksiz etiketleri temizler.
 
-### 2. ⚡ Ultra Hızlı Kayıpsız Akış Kopyalama & Senkronizasyon (Zero-Desync)
-- **1-2 Saniyede Birleştirme (Stream Copy):** Video ve Türkçe ses akışları CPU'da yeniden kodlanmadan (re-encode olmadan) doğrudan bayt seviyesinde kopyalanır (`-c copy -bsf:a aac_adtstoasc`).
-- **Kusursuz Ses Senkronizasyonu:** Gerçek sunucu zaman damgaları (PTS) baz alınarak milisaniyelik ses kaymaları (lip-sync drift) tamamen önlenir.
+### 2. 🎛️ Çoklu Ses (Multi-Audio) & Açılıp-Kapanabilir Altyazı (Soft-Sub / CC)
+- **Çoklu Ses Desteği:** Kaynakta mevcutsa **Türkçe Dublaj** ve **İngilizce (Orijinal)** ses kanalları ayrı ayrı MP4 konteynerine işlenir (`-metadata:s:a:0 title="Türkçe Dublaj" -metadata:s:a:1 title="İngilizce (Orijinal)"`).
+- **Telegram Oynatıcı Entegre Altyazı (Soft-Sub):** Türkçe `.vtt` / `.srt` altyazıları video görüntüsüne gömülmeden, yerel altyazı izi (`mov_text`) olarak eklenir. İzleyiciler Telegram oynatıcısındaki **CC** butonundan altyazıyı dilediği gibi açıp kapatabilir.
+- **1-2 Saniyede Kayıpsız Birleştirme (Instant Stream Copy):** Tüm ses ve altyazı kanalları re-encode olmadan doğrudan kopyalanır (`-c copy -c:s mov_text -bsf:a aac_adtstoasc`).
+- **Otomatik Telegram Bilgi Rozetleri:** Yüklenen videoların açıklama kartına `🎙️ Ses: 🇹🇷 Türkçe Dublaj | 🇬🇧 Orijinal` ve `💬 Altyazı: 🇹🇷 Türkçe (Açılıp Kapanabilir / CC)` rozetleri otomatik eklenir.
+
+### 3. ⚡ Kusursuz Ses & Video Senkronizasyonu (Zero-Desync)
+- **Gerçek Zaman Damgası Kilitleme:** Kaynak sunucudaki PTS/DTS zaman damgaları korunarak milisaniyelik ses kayması ve dudak senkron (drift) sorunları engellenir.
 - **Stüdyo Master Çok Dilli Akış Önceliği:** Ayrı video ve Türkçe dublaj kanalı barındıran HLS kaynakları önceliklendirilir.
 
-### 3. 🛑 Tam Entegre İptal ve Süreç Yönetimi (Instant Cancellation)
+### 4. 🛑 Tam Entegre İptal ve Süreç Yönetimi (Instant Cancellation)
 - **Anında Görev Sonlandırma:** `/iptal <id>`, `/iptal hepsi` veya butonla iptal yapıldığında çalışan HTTP indirme soketi, FFmpeg süreci ve Telegram upload görevi **o milisaniyede derhal öldürülür**.
 - **Canlı Butonlu İptal (`/durum`):** Durum ekranında her aktif indirme için **`[❌ #ID İptal Et]`** ve tek tıkla her şeyi durduran **`[🛑 Tüm Kuyruğu Temizle]`** butonları bulunur.
 - **Otomatik Geçici Dosya Temizliği:** İptal edilen veya tamamlanan işlerin tüm geçici dosyaları (`.ts`, `.mp4`, `.jpg`) anında diskten silinir.
 
-### 4. 📊 Canlı İlerleme ve Yükleme Takibi (`/durum`)
+### 5. 📊 Canlı İlerleme ve Yükleme Takibi (`/durum`)
 - **Canlı MTProto Yükleme Hızı:** Video kaynak siteden indirilirken ve ardından **Telegram sunucularına yüklenirken** anlık hız (MB/s), yüklenen MB miktarı ve tahmini kalan süre (ETA) gösterilir.
 - **`[🔄 Canlı Yenile]` Butonu:** Mesaj kirliliği yaratmadan tek tıkla mevcut durum mesajını anında günceller.
 - **Kuyruk Sıralaması:** Sezon ve bölüm sırasına (`season ASC, episode ASC`) göre mutlak sıralı işleme pipeline'ı.
 
-### 5. 🎯 Kaynak Seviyesinde 720p/HD Akıllı Varyant Seçimi (Re-encode Yok)
+### 6. 🎯 Kaynak Seviyesinde 720p/HD Akıllı Varyant Seçimi (Re-encode Yok)
 - **Kayıpsız & Hızlı:** Telegram'ın 2.0 GB sınırına takılmamak için HLS Master Playlist içinden en uygun 720p / optimum bitrate akışını otomatik seçer.
 - **Auto-Compress Motoru (Fallback):** 1.95 GB üzerindeki istisnai uzun yayınlarda CPU dostu dinamik bitrate optimizasyonu uygulayarak yüklemenin durmasını engeller.
 
-### 6. 📌 Mükerrer Konu Önleme & Konu Yönetimi
+### 7. 📌 Mükerrer Konu Önleme & Konu Yönetimi
 - **Unicode & Emoji Normalizasyonu:** Başlıklardaki emojileri (`🎬`, `🍿`, `📺`), özel karakterleri ve boşlukları temizleyerek arar; asla çift/mükerrer forum konusu açmaz.
 - **Otomatik Konu Yakalama (Auto-Learn Listener):** Grupta yeni bir forum konusu açıldığında veya düzenlendiğinde bot bunu anında algılar ve veritabanına kaydeder.
 - **Manuel Konu Bağlama:**
   - `/konular` ➔ Kayıtlı tüm forum konularını ve ID'lerini listeler.
   - `/konubagla <Dizi Adı> [Konu_ID]` ➔ Konu içindeyken tek komutla diziyi konuya eşler.
 
-### 7. ⚡ Otomatik Yeni Bölüm Takipçisi (Auto-Tracker Daemon)
+### 8. ⚡ Otomatik Yeni Bölüm Takipçisi (Auto-Tracker Daemon)
 - **Watchlist (`/takip <dizi>`):** Takip listesindeki dizileri arka planda periyodik olarak tarar.
 - **Otonom Yükleme:** Yeni bölüm yayınlandığında otomatik tespit eder, indirir ve ilgili forum konusuna aktarır.
 
-### 8. 🛡️ Bütünlük Denetimi & Eksik Bölüm Tamamlama (Auto-Healer)
+### 9. 🛡️ Bütünlük Denetimi & Eksik Bölüm Tamamlama (Auto-Healer)
 - **Yükleme Sonrası Otomatik Denetim:** Bir bölüm yüklendiğinde sezonun önceki bölümlerinde atlanmış/eksik varsa otomatik sıraya alır.
 - **Manuel Denetim (`/kontrol <dizi>`):** Dizinin eklentideki tüm bölümleriyle gruptaki yüklemeleri karşılaştırır ve eksik kalanları tamamlar.
 
-### 9. 👥 Grup İstek & Yönetici Onay Sistemi
+### 10. 👥 Grup İstek & Yönetici Onay Sistemi
 - **Üye İstekleri (`/istek <içerik>`):** Grup üyeleri talep oluşturur; yöneticilere `[✅ Onayla]` / `[❌ Reddet]` butonları gider.
 - **Yönetici/Dark İsteği:** Yöneticiler `/istek <dizi>` yazdığında onaysız doğrudan tüm sezonlar sıraya alınır.
 

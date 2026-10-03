@@ -1096,13 +1096,15 @@ class DiziBotManager:
                     for l in links:
                         l_name = l.get("name", "Akış") if isinstance(l, dict) else getattr(l, "name", "Akış")
                         l_url = l.get("url", "") if isinstance(l, dict) else getattr(l, "url", "")
+                        l_subs = l.get("subtitles", []) if isinstance(l, dict) else getattr(l, "subtitles", [])
                         if l_url:
                             candidates.append({
                                 "plugin": p_direct,
                                 "name": l_name,
                                 "url": l_url,
                                 "ep_url": url_direct,
-                                "title": title
+                                "title": title,
+                                "subtitles": l_subs
                             })
                 else:
                     detail = await asyncio.wait_for(local_load_item(p_direct, url_direct), timeout=8)
@@ -1116,13 +1118,15 @@ class DiziBotManager:
                             for l in links:
                                 l_name = l.get("name", "Akış") if isinstance(l, dict) else getattr(l, "name", "Akış")
                                 l_url = l.get("url", "") if isinstance(l, dict) else getattr(l, "url", "")
+                                l_subs = l.get("subtitles", []) if isinstance(l, dict) else getattr(l, "subtitles", [])
                                 if l_url:
                                     candidates.append({
                                         "plugin": p_direct,
                                         "name": l_name,
                                         "url": l_url,
                                         "ep_url": ep_url,
-                                        "title": ep.get("title", "")
+                                        "title": ep.get("title", ""),
+                                        "subtitles": l_subs
                                     })
             except Exception as direct_err:
                 logger.debug(f"Doğrudan kaynak çözme hatası ({p_direct}): {direct_err}")
@@ -1163,10 +1167,21 @@ class DiziBotManager:
                     }
                     db.update_queue_progress(job_id, "downloading", 0.73 if phase == "muxing" else pct * 0.7)
 
-                dl_success = await Downloader.download_hls_stream(stream_url, temp_file, progress_cb=prog_cb)
-                if not dl_success or not temp_file.exists():
+                dl_res = await Downloader.download_hls_stream(
+                    stream_url, 
+                    temp_file, 
+                    progress_cb=prog_cb,
+                    extra_subtitles=cand.get("subtitles")
+                )
+                if not dl_res or not dl_res.get("success") or not temp_file.exists():
                     logger.warning(f"[{p_name}] İndirme başarısız oldu, sonraki kaynağa geçiliyor...")
                     continue
+
+                has_multi_audio = dl_res.get("has_multi_audio", False)
+                has_subtitles = dl_res.get("has_subtitles", False)
+
+                audio_badge = "🇹🇷 Türkçe Dublaj | 🇬🇧 Orijinal" if has_multi_audio else "🇹🇷 Türkçe Dublaj"
+                sub_badge = "\n💬 **Altyazı:** 🇹🇷 Türkçe (Açılıp Kapanabilir / CC)" if has_subtitles else ""
 
                 if db.is_job_cancelled(job_id):
                     break
@@ -1225,6 +1240,8 @@ class DiziBotManager:
                     caption = (
                         f"🎬 **{clean_title}**\n\n"
                         f"📌 **Tür:** Film\n"
+                        f"🎙️ **Ses:** {audio_badge}"
+                        f"{sub_badge}\n"
                         f"📦 **Boyut:** {f_size / (1024*1024):.1f} MB\n\n"
                         f"🌐 **Daha Fazlası İçin :**  izle.darkbox.com.tr:9443"
                     )
@@ -1232,6 +1249,8 @@ class DiziBotManager:
                     caption = (
                         f"🎬 **{clean_title}**\n"
                         f"📌 **{season}. Sezon {episode}. Bölüm**\n"
+                        f"🎙️ **Ses:** {audio_badge}"
+                        f"{sub_badge}\n"
                         f"📦 **Boyut:** {f_size / (1024*1024):.1f} MB\n\n"
                         f"🌐 **Daha Fazlası İçin :**  izle.darkbox.com.tr:9443"
                     )
