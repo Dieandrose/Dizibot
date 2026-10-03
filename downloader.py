@@ -351,39 +351,71 @@ class Downloader:
 
     @classmethod
     async def detect_audio_offset(cls, audio_tr_path: Path, audio_ref_path: Path) -> float:
-        """Türkçe ses ile referans ses arasındaki başlangıç/jenerik ofset farkını otomatik tespit eder."""
+        """Türkçe ses ile referans ses arasındaki ofset farkını akustik dalga korelasyonu (audio cross-correlation) ile milisaniyesine kadar hesaplar."""
         try:
-            cmd_tr = ["ffmpeg", "-t", "120", "-i", str(audio_tr_path), "-af", "silencedetect=noise=-30dB:d=0.4", "-f", "null", "-"]
-            cmd_ref = ["ffmpeg", "-t", "120", "-i", str(audio_ref_path), "-af", "silencedetect=noise=-30dB:d=0.4", "-f", "null", "-"]
+            import wave, struct
+            wav_tr = audio_tr_path.with_suffix(".tr_probe.wav")
+            wav_ref = audio_ref_path.with_suffix(".ref_probe.wav")
             
-            proc_tr = await asyncio.create_subprocess_exec(*cmd_tr, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-            proc_ref = await asyncio.create_subprocess_exec(*cmd_ref, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            # İlk 120 saniyelik sesi 16kHz mono olarak hızlıca çıkar
+            cmd_tr = ["ffmpeg", "-y", "-t", "120", "-i", str(audio_tr_path), "-vn", "-ac", "1", "-ar", "16000", str(wav_tr)]
+            cmd_ref = ["ffmpeg", "-y", "-t", "120", "-i", str(audio_ref_path), "-vn", "-ac", "1", "-ar", "16000", str(wav_ref)]
             
-            _, err_tr = await proc_tr.communicate()
-            _, err_ref = await proc_ref.communicate()
+            p1 = await asyncio.create_subprocess_exec(*cmd_tr, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            p2 = await asyncio.create_subprocess_exec(*cmd_ref, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            await asyncio.gather(p1.communicate(), p2.communicate())
             
-            txt_tr = err_tr.decode('utf-8', errors='ignore')
-            txt_ref = err_ref.decode('utf-8', errors='ignore')
-            
-            tr_ends = [float(m.group(1)) for m in re.finditer(r"silence_end:\s*([0-9.]+)", txt_tr)]
-            ref_ends = [float(m.group(1)) for m in re.finditer(r"silence_end:\s*([0-9.]+)", txt_ref)]
-            
-            if tr_ends and ref_ends:
-                diff0 = tr_ends[0] - ref_ends[0]
-                if 0.4 <= diff0 <= 15.0:
-                    return diff0
-                    
-                tr_durs = [(float(m.group(1)), float(m.group(2))) for m in re.finditer(r"silence_end:\s*([0-9.]+)\s*\|\s*silence_duration:\s*([0-9.]+)", txt_tr)]
-                ref_durs = [(float(m.group(1)), float(m.group(2))) for m in re.finditer(r"silence_end:\s*([0-9.]+)\s*\|\s*silence_duration:\s*([0-9.]+)", txt_ref)]
+            if not (wav_tr.exists() and wav_ref.exists()):
+                return 0.0
                 
-                tr_major = [end for end, dur in tr_durs if dur >= 2.5]
-                ref_major = [end for end, dur in ref_durs if dur >= 2.5]
-                if tr_major and ref_major:
-                    diff_m = tr_major[0] - ref_major[0]
-                    if 0.4 <= diff_m <= 15.0:
-                        return diff_m
+            def get_envelope(p: Path):
+                with wave.open(str(p), 'rb') as w:
+                    sr = w.getframerate()
+                    n = min(w.getnframes(), sr * 120)
+                    raw = w.readframes(n)
+                    samples = struct.unpack(f"<{n}h", raw[:n*2])
+                    win = sr // 100 # 10ms pencere
+                    env = [sum(abs(x) for x in samples[i:i+win]) / win for i in range(0, len(samples) - win, win)]
+                    mean_val = sum(env) / max(len(env), 1)
+                    return [x - mean_val for x in env]
+                    
+            env_tr = get_envelope(wav_tr)
+            env_ref = get_envelope(wav_ref)
+            
+            wav_tr.unlink(missing_ok=True)
+            wav_ref.unlink(missing_ok=True)
+            
+            if not env_tr or not env_ref:
+                return 0.0
+                
+            # -15 ile +15 saniye aralığında (1500 pencere) korelasyon ara
+            max_lag_win = 1500
+            best_lag = 0
+            best_corr = -1e18
+            N = min(len(env_tr), len(env_ref))
+            
+            for lag in range(-max_lag_win, max_lag_win + 1):
+                corr = 0.0
+                count = 0
+                if lag >= 0:
+                    for i in range(N - lag):
+                        corr += env_tr[i + lag] * env_ref[i]
+                        count += 1
+                else:
+                    for i in range(-lag, N):
+                        corr += env_tr[i + lag] * env_ref[i]
+                        count += 1
+                if count > 0:
+                    corr /= count
+                if corr > best_corr:
+                    best_corr = corr
+                    best_lag = lag
+                    
+            lag_sec = best_lag / 100.0
+            if abs(lag_sec) >= 0.2:
+                return lag_sec
         except Exception as e:
-            logger.debug(f"Audio offset tespiti atlandı: {e}")
+            logger.debug(f"Audio cross-correlation hatası: {e}")
         return 0.0
 
     @classmethod
@@ -670,9 +702,12 @@ class Downloader:
                 elif tmp_video_file and tmp_video_file.exists():
                     tr_offset = await cls.detect_audio_offset(tmp_audio_tr_file, tmp_video_file)
 
-                if tr_offset > 0.35:
-                    logger.info(f"🎙️ Otomatik Ses Senkronizasyonu: Türkçe seste {tr_offset:.2f} saniye gecikme tespit edildi, ofset düzeltiliyor...")
+                if tr_offset > 0.25:
+                    logger.info(f"🎙️ Otomatik Ses Senkronizasyonu: Türkçe seste +{tr_offset:.2f} saniye gecikme tespit edildi, kırpılıyor...")
                     cmd.extend(["-ss", f"{tr_offset:.3f}", "-i", str(tmp_audio_tr_file)])
+                elif tr_offset < -0.25:
+                    logger.info(f"🎙️ Otomatik Ses Senkronizasyonu: Türkçe ses {abs(tr_offset):.2f} saniye önde, ofset ekleniyor...")
+                    cmd.extend(["-itsoffset", f"{abs(tr_offset):.3f}", "-i", str(tmp_audio_tr_file)])
                 else:
                     cmd.extend(["-i", str(tmp_audio_tr_file)])
 
