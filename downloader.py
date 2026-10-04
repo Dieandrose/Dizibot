@@ -545,19 +545,26 @@ class Downloader:
                 if total == 0:
                     return
 
-                sem = asyncio.Semaphore(45 if is_video else 80)
+                sem = asyncio.Semaphore(20 if is_video else 25)
                 nonlocal done_all_chunks
 
                 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
                 from cryptography.hazmat.backends import default_backend
 
+                def is_valid_chunk(data: bytes) -> bool:
+                    if not data or len(data) < 128:
+                        return False
+                    if data.startswith(b"<!DOCTYPE") or data.startswith(b"<html") or b"<head" in data[:300] or b"<body" in data[:300]:
+                        return False
+                    return True
+
                 async def fetch_seg(idx: int, s_url: str):
                     nonlocal done_all_chunks
                     async with sem:
-                        for retry in range(3):
+                        for retry in range(5):
                             try:
-                                res = await session.get(s_url, headers=headers, timeout=10.0)
-                                if res.status_code == 200 and len(res.content) > 0:
+                                res = await session.get(s_url, headers=headers, timeout=12.0)
+                                if res.status_code == 200 and is_valid_chunk(res.content):
                                     done_all_chunks += 1
                                     chunk_data = res.content
                                     # AES-128 Şifre Çözme
@@ -576,12 +583,15 @@ class Downloader:
                                         except TypeError:
                                             progress_cb(done_all_chunks / tot_all_chunks)
                                     return idx, chunk_data
+                                else:
+                                    await asyncio.sleep(0.3 + retry * 0.4)
                             except Exception:
-                                await asyncio.sleep(0.1 + retry * 0.2)
+                                await asyncio.sleep(0.3 + retry * 0.4)
                         return idx, b""
 
                 completed_chunks = {}
                 next_write_idx = 0
+                missing_chunks_count = 0
                 tasks = [asyncio.create_task(fetch_seg(i, seg_list[i])) for i in range(total)]
 
                 with open(dest_file, "wb") as f_out:
@@ -592,14 +602,28 @@ class Downloader:
                             c = completed_chunks.pop(next_write_idx)
                             if c:
                                 f_out.write(c)
+                            else:
+                                missing_chunks_count += 1
                             next_write_idx += 1
+
+                if missing_chunks_count > 0:
+                    logger.warning(f"⚠️ {dest_file.name} için {missing_chunks_count}/{total} parça eksik kaldı (Akış bütünlüğü bozuldu).")
+                    return False
+                return True
 
             logger.info(f"HLS İndiriliyor (Hızlı): Video={len(video_segs)} parça" + (f", Ses={len(audio_tr_segs)} parça" if audio_tr_segs else ""))
             dl_tasks = [download_seg_list(video_segs, tmp_video_file, key_bytes=v_key_bytes, key_iv=v_key_iv, is_video=True)]
             if audio_tr_segs and tmp_audio_tr_file:
                 dl_tasks.append(download_seg_list(audio_tr_segs, tmp_audio_tr_file, key_bytes=a_key_bytes, key_iv=a_key_iv, is_video=False))
             
-            await asyncio.gather(*dl_tasks)
+            results = await asyncio.gather(*dl_tasks)
+            if not all(results):
+                logger.warning("HLS akış parçalarından bazıları eksik indi veya bozuk (HTML block), aday başarısız sayılıyor.")
+                if tmp_video_file.exists():
+                    tmp_video_file.unlink(missing_ok=True)
+                if tmp_audio_tr_file and tmp_audio_tr_file.exists():
+                    tmp_audio_tr_file.unlink(missing_ok=True)
+                return {"success": False}
 
             if not tmp_video_file.exists() or tmp_video_file.stat().st_size < 1024 * 100:
                 logger.warning("HLS video dosyası indirilemedi veya geçersiz boyutta.")
