@@ -356,12 +356,108 @@ class Downloader:
         return candidates
 
     @classmethod
+    async def fetch_and_prepare_opensubtitles(
+        cls, 
+        title: str, 
+        season: int = 0, 
+        episode: int = 0, 
+        is_movie: bool = False, 
+        output_srt: Optional[Path] = None
+    ) -> Optional[Path]:
+        """
+        OpenSubtitles / Stremio API üzerinden içerikle uyumlu Türkçe altyazı arar, 
+        indirir, Türkçe karakter kodlamasını (UTF-8) onarır ve diske kaydeder.
+        """
+        import httpx
+        clean_title = re.sub(r'[\(\[\{].*?[\)\]\}]', '', title).strip()
+        imdb_id = None
+        
+        # 1. TMDB -> IMDB ID tespiti
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            try:
+                tmdb_url = f"https://mid.vidzee.wtf/tmdb/search/multi?query={urllib.parse.quote(clean_title)}&page=1&include_adult=false&api_key=adc48d20c0956934fb224de5c40bb85d&language=tr-TR"
+                res = await client.get(tmdb_url)
+                if res.status_code == 200:
+                    data = res.json()
+                    results = data.get("results", [])
+                    if results:
+                        tmdb_id = results[0].get("id")
+                        media_type = results[0].get("media_type", "movie" if is_movie else "tv")
+                        ext_url = f"https://mid.vidzee.wtf/tmdb/{media_type}/{tmdb_id}/external_ids?api_key=adc48d20c0956934fb224de5c40bb85d"
+                        ext_res = await client.get(ext_url)
+                        if ext_res.status_code == 200:
+                            imdb_id = ext_res.json().get("imdb_id")
+            except Exception as e:
+                logger.debug(f"OpenSubtitles TMDB sorgulama hatası: {e}")
+
+        if not imdb_id or not imdb_id.startswith("tt"):
+            return None
+
+        # 2. Stremio OpenSubtitles v3 endpoint
+        if is_movie or season == 0:
+            endpoint = f"https://opensubtitles-v3.strem.io/subtitles/movie/{imdb_id}/video.json"
+        else:
+            endpoint = f"https://opensubtitles-v3.strem.io/subtitles/series/{imdb_id}:{season}:{episode}/video.json"
+
+        sub_url = None
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            try:
+                r = await client.get(endpoint)
+                if r.status_code == 200:
+                    data = r.json()
+                    for item in data.get("subtitles", []):
+                        lang = (item.get("lang") or "").lower()
+                        if lang in ["tur", "tr", "turkish"]:
+                            sub_url = item.get("url")
+                            break
+            except Exception as e:
+                logger.debug(f"OpenSubtitles endpoint hatası: {e}")
+
+        if not sub_url:
+            return None
+
+        # 3. İndirme ve Karakter Kodlaması Normalizasyonu (UTF-8)
+        try:
+            async with httpx.AsyncClient(timeout=12.0) as client:
+                r = await client.get(sub_url)
+                raw_bytes = r.content
+
+            text = None
+            for enc in ["utf-8", "windows-1254", "iso-8859-9", "latin5", "cp1252"]:
+                try:
+                    text = raw_bytes.decode(enc)
+                    win1254_fixes = {
+                        "ý": "ı", "þ": "ş", "ð": "ğ",
+                        "Ý": "İ", "Þ": "Ş", "Ð": "Ğ"
+                    }
+                    for old_char, new_char in win1254_fixes.items():
+                        if old_char in text:
+                            text = text.replace(old_char, new_char)
+                    break
+                except UnicodeDecodeError:
+                    continue
+
+            if not text:
+                text = raw_bytes.decode("utf-8", errors="ignore")
+
+            if output_srt is None:
+                output_srt = TEMP_DIR / f"sub_{imdb_id}_{'movie' if is_movie else f'S{season}E{episode}'}.srt"
+
+            output_srt.write_text(text, encoding="utf-8")
+            logger.info(f"OpenSubtitles Türkçe altyazı hazırlandı: {output_srt.name} ({output_srt.stat().st_size} bytes)")
+            return output_srt
+        except Exception as e:
+            logger.error(f"Altyazı kaydetme hatası: {e}")
+            return None
+
+    @classmethod
     async def download_hls_stream(
         cls, 
         stream_url: str, 
         output_path: Path, 
         progress_cb: Optional[Callable[..., None]] = None,
-        extra_subtitles: Optional[List[Dict[str, Any]]] = None
+        extra_subtitles: Optional[List[Dict[str, Any]]] = None,
+        subtitle_path: Optional[Path] = None
     ) -> Dict[str, Any]:
         """HLS akışını video + Türkçe/Orijinal ses kanalları ve açılıp-kapanabilir Türkçe altyazı (Soft-Sub) ile indirir."""
         custom_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -688,6 +784,22 @@ class Downloader:
                     except Exception:
                         pass
 
+            # Altyazı Girişi (Eğer sağlandıysa MP4 içine mov_text olarak gömülür)
+            sub_inputs = []
+            sub_maps = []
+            sub_meta = []
+            if subtitle_path and subtitle_path.exists() and subtitle_path.stat().st_size > 0:
+                sub_inputs = ["-i", str(subtitle_path)]
+                sub_idx = 2 if (tmp_audio_tr_file and tmp_audio_tr_file.exists() and tmp_audio_tr_file.stat().st_size > 0) else 1
+                sub_maps = ["-map", f"{sub_idx}:s:0"]
+                sub_meta = [
+                    "-c:s", "mov_text",
+                    "-metadata:s:s:0", "language=tur",
+                    "-metadata:s:s:0", "title=Türkçe",
+                    "-metadata:s:s:0", "handler_name=Türkçe",
+                    "-disposition:s:0", "default"
+                ]
+
             # Anında Ultra Hızlı Birleştirme (Kayıpsız 0-CPU Passthrough / Direct Stream Copy)
             if tmp_audio_tr_file and tmp_audio_tr_file.exists() and tmp_audio_tr_file.stat().st_size > 0:
                 cmd = [
@@ -695,10 +807,14 @@ class Downloader:
                     "-threads", "0",
                     "-i", str(tmp_video_file),
                     "-i", str(tmp_audio_tr_file),
+                    *sub_inputs,
                     "-map", "0:v:0",
                     "-map", "1:a:0",
-                    "-c", "copy",
+                    *sub_maps,
+                    "-c:v", "copy",
+                    "-c:a", "copy",
                     "-bsf:a", "aac_adtstoasc",
+                    *sub_meta,
                     "-movflags", "+faststart",
                     str(output_path)
                 ]
@@ -707,10 +823,14 @@ class Downloader:
                     "ffmpeg", "-y",
                     "-threads", "0",
                     "-i", str(tmp_video_file),
+                    *sub_inputs,
                     "-map", "0:v:0",
                     "-map", "0:a:0?",
-                    "-c", "copy",
+                    *sub_maps,
+                    "-c:v", "copy",
+                    "-c:a", "copy",
                     "-bsf:a", "aac_adtstoasc",
+                    *sub_meta,
                     "-movflags", "+faststart",
                     str(output_path)
                 ]

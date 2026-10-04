@@ -1268,18 +1268,45 @@ class DiziBotManager:
                     }
                     db.update_queue_progress(job_id, "downloading", 0.73 if phase == "muxing" else pct * 0.7)
 
+                # 1. Öncelik: Türkçe Ses / Dublaj Tespiti
+                is_dublaj = cand.get("is_dublaj", False) or any(k in (cand.get("name") or "").lower() or k in (cand.get("title") or "").lower() for k in ["dublaj", "dub", "tr dub", "türkçe dublaj", "türkçe", "tr"])
+
+                # 2. Öncelik (Fallback): TR Ses Yoksa OpenSubtitles'dan Türkçe Altyazı Getir ve Gömelim
+                sub_file = None
+                if not is_dublaj:
+                    logger.info(f"İçerik orijinal dilde, OpenSubtitles üzerinden Türkçe altyazı aranıyor: {clean_title}")
+                    try:
+                        sub_file = await Downloader.fetch_and_prepare_opensubtitles(
+                            clean_title, 
+                            season=season, 
+                            episode=episode, 
+                            is_movie=is_movie
+                        )
+                    except Exception as sub_err:
+                        logger.warning(f"OpenSubtitles arama hatası: {sub_err}")
+
                 dl_res = await Downloader.download_hls_stream(
                     stream_url, 
                     temp_file, 
                     progress_cb=prog_cb,
-                    extra_subtitles=cand.get("subtitles")
+                    extra_subtitles=cand.get("subtitles"),
+                    subtitle_path=sub_file
                 )
                 if not dl_res or not dl_res.get("success") or not temp_file.exists():
                     logger.warning(f"[{p_name}] İndirme başarısız oldu, sonraki kaynağa geçiliyor...")
+                    if sub_file and sub_file.exists():
+                        sub_file.unlink(missing_ok=True)
                     continue
 
-                audio_badge = "🇹🇷 Türkçe Dublaj"
-                sub_badge = ""
+                if is_dublaj:
+                    audio_badge = "🇹🇷 Türkçe Dublaj"
+                    sub_badge = ""
+                elif sub_file:
+                    audio_badge = "🌐 Orijinal Ses"
+                    sub_badge = "🇹🇷 Türkçe (OpenSubtitles)"
+                else:
+                    audio_badge = "🌐 Orijinal Ses"
+                    sub_badge = ""
 
                 if db.is_job_cancelled(job_id):
                     break
@@ -1300,6 +1327,8 @@ class DiziBotManager:
 
                 if not parts_to_upload:
                     logger.warning(f"[{p_name}] Video parçalama başarısız oldu, sonraki kaynağa geçiliyor...")
+                    if sub_file and sub_file.exists():
+                        sub_file.unlink(missing_ok=True)
                     continue
 
                 total_parts = len(parts_to_upload)
@@ -1316,17 +1345,20 @@ class DiziBotManager:
                         part_thumb = await Downloader.extract_thumbnail(part_file)
 
                         part_tag = f" `[Parça {part_idx}/{total_parts}]`" if total_parts > 1 else ""
+                        sub_text = f"\n🗣️ **Dil:** {audio_badge}" + (f"\n💬 **Altyazı:** {sub_badge}" if sub_badge else "")
                         if is_movie:
                             caption = (
                                 f"🎬 **{clean_title}**{part_tag}\n\n"
-                                f"📌 **Tür:** Film\n"
+                                f"📌 **Tür:** Film"
+                                f"{sub_text}\n"
                                 f"📦 **Boyut:** {part_fsize / (1024*1024):.1f} MB\n\n"
                                 f"🌐 **Daha Fazlası İçin :**  izle.darkbox.com.tr:9443"
                             )
                         else:
                             caption = (
                                 f"🎬 **{clean_title}**{part_tag}\n"
-                                f"📌 **{season}. Sezon {episode}. Bölüm**\n"
+                                f"📌 **{season}. Sezon {episode}. Bölüm**"
+                                f"{sub_text}\n"
                                 f"📦 **Boyut:** {part_fsize / (1024*1024):.1f} MB\n\n"
                                 f"🌐 **Daha Fazlası İçin :**  izle.darkbox.com.tr:9443"
                             )
