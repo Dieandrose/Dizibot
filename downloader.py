@@ -651,22 +651,17 @@ class Downloader:
                     except Exception:
                         pass
 
-            # FFmpeg ile Mükemmel PTS Senkronlu Birleştirme (Kayıpsız Video + Otomatik PTS Düzeltmeli Ses)
+            # Anında Ultra Hızlı Birleştirme (Kayıpsız 0-CPU Passthrough / Direct Stream Copy)
             if tmp_audio_tr_file and tmp_audio_tr_file.exists() and tmp_audio_tr_file.stat().st_size > 0:
                 cmd = [
                     "ffmpeg", "-y",
                     "-threads", "0",
-                    "-fflags", "+genpts+discardcorrupt",
                     "-i", str(tmp_video_file),
                     "-i", str(tmp_audio_tr_file),
                     "-map", "0:v:0",
                     "-map", "1:a:0",
-                    "-c:v", "copy",
-                    "-c:a", "aac",
-                    "-b:a", "192k",
-                    "-af", "aresample=async=1:first_pts=0",
-                    "-avoid_negative_ts", "make_zero",
-                    "-shortest",
+                    "-c", "copy",
+                    "-bsf:a", "aac_adtstoasc",
                     "-movflags", "+faststart",
                     str(output_path)
                 ]
@@ -674,13 +669,11 @@ class Downloader:
                 cmd = [
                     "ffmpeg", "-y",
                     "-threads", "0",
-                    "-fflags", "+genpts+discardcorrupt",
                     "-i", str(tmp_video_file),
                     "-map", "0:v:0",
                     "-map", "0:a:0?",
                     "-c", "copy",
-                    "-avoid_negative_ts", "make_zero",
-                    "-shortest",
+                    "-bsf:a", "aac_adtstoasc",
                     "-movflags", "+faststart",
                     str(output_path)
                 ]
