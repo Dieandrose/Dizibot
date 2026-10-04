@@ -336,10 +336,10 @@ class Downloader:
             name = (c.get("name") or "").lower()
             title = (c.get("title") or "").lower()
             
-            # Stüdyo master kaynakları (Dizi65, SineWix, RecTV) kaliteli ses/görüntüye sahiptir
-            score = 70 if p in ["Dizi65", "SineWix", "RecTV"] else 40
+            # Stüdyo master ve tekil akışlı kaynaklar (Dizi65, SineWix, RecTV, DiziIzleClick, Dizibal, Dizibol) kusursuz senkrona sahiptir
+            score = 80 if p in ["Dizi65", "SineWix", "RecTV", "DiziIzleClick", "Dizibal", "Dizibol", "FullHDFilmizlesene", "FilmModu"] else 40
             if any(k in name or k in title for k in ["dublaj", "dub", "tr dub", "türkçe dublaj", "türkçe", "tr"]):
-                score = 100
+                score += 50
             elif any(k in name or k in title for k in ["altyazı", "sub", "eng", "orijinal", "english"]):
                 score = 10
                 
@@ -607,7 +607,7 @@ class Downloader:
                     except Exception:
                         pass
 
-            # FFmpeg ile Anında Kayıpsız Birleştirme (Instant Stream Copy - < 1 sn)
+            # FFmpeg ile Anında Senkron Birleştirme (Kayıpsız Video + Otomatik PTS Senkronlu Ses)
             if tmp_audio_tr_file and tmp_audio_tr_file.exists() and tmp_audio_tr_file.stat().st_size > 0:
                 cmd = [
                     "ffmpeg", "-y",
@@ -617,7 +617,9 @@ class Downloader:
                     "-i", str(tmp_audio_tr_file),
                     "-map", "0:v:0",
                     "-map", "1:a:0",
-                    "-c", "copy",
+                    "-c:v", "copy",
+                    "-c:a", "aac", "-b:a", "192k",
+                    "-af", "aresample=async=1",
                     "-avoid_negative_ts", "make_zero",
                     "-shortest",
                     "-movflags", "+faststart",
@@ -711,10 +713,12 @@ class Downloader:
             part_file = input_path.with_name(f"{input_path.stem}_part{i+1}.mp4")
             cmd = [
                 "ffmpeg", "-y", "-threads", "0",
+                "-i", str(input_path),
                 "-ss", f"{ss:.2f}",
                 "-t", f"{t:.2f}",
-                "-i", str(input_path),
-                "-c", "copy",
+                "-c:v", "copy",
+                "-c:a", "aac", "-b:a", "192k",
+                "-af", "aresample=async=1",
                 "-avoid_negative_ts", "make_zero",
                 "-movflags", "+faststart",
                 str(part_file)
