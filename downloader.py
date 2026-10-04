@@ -658,6 +658,26 @@ class Downloader:
                     logger.error(f"FFmpeg birleştirme hatası: {err.decode('utf-8', errors='ignore')[-300:]}")
                 return {"success": False}
 
+            # Ses Bütünlüğü Doğrulaması (Audio Stream Integrity Check)
+            try:
+                probe_audio_cmd = [
+                    "ffprobe", "-v", "error",
+                    "-select_streams", "a",
+                    "-show_entries", "stream=index",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    str(output_path)
+                ]
+                proc_a = await asyncio.create_subprocess_exec(*probe_audio_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                stdout_a, _ = await proc_a.communicate()
+                has_audio_track = bool(stdout_a.decode().strip())
+            except Exception:
+                has_audio_track = True
+
+            if not has_audio_track:
+                logger.warning("⚠️ Kaynakta ses akışı bulunamadı (Sessiz Video Tespit Edildi). Dosya silinip alternatif kaynak deneniyor...")
+                output_path.unlink(missing_ok=True)
+                return {"success": False}
+
             return {
                 "success": True,
                 "audio_track_count": 1,
