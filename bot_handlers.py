@@ -260,7 +260,8 @@ class DiziBotManager:
         # 4. /durum
         @self.app.on_message(filters.command(["durum", "status"]))
         async def cmd_status(client: Client, message: Message):
-            text, markup = self.get_system_status_report()
+            u_id = message.from_user.id if message.from_user else 0
+            text, markup = self.get_system_status_report(user_id=u_id)
             await message.reply_text(text, reply_markup=markup)
 
         # 5. /kuyruk
@@ -1006,7 +1007,7 @@ class DiziBotManager:
 
             # 7. Durum Canlı Yenileme Butonu
             elif data == "status_ref":
-                text, markup = self.get_system_status_report()
+                text, markup = self.get_system_status_report(user_id=user_id)
                 try:
                     await query.edit_message_text(text, reply_markup=markup)
                     await query.answer("🔄 Durum güncellendi.")
@@ -1033,7 +1034,7 @@ class DiziBotManager:
                 else:
                     await query.answer(f"⚠️ İşlem #{c_id} zaten tamamlanmış veya bulunamadı.", show_alert=True)
                 
-                text, markup = self.get_system_status_report()
+                text, markup = self.get_system_status_report(user_id=user_id)
                 try:
                     await query.edit_message_text(text, reply_markup=markup)
                 except Exception:
@@ -1057,13 +1058,14 @@ class DiziBotManager:
                     except Exception:
                         pass
                 await query.answer(f"🛑 Tüm kuyruk temizlendi ({del_count} işlem durduruldu).", show_alert=True)
-                text, markup = self.get_system_status_report()
+                text, markup = self.get_system_status_report(user_id=user_id)
                 try:
                     await query.edit_message_text(text, reply_markup=markup)
                 except Exception:
                     pass
 
-    def get_system_status_report(self) -> Tuple[str, InlineKeyboardMarkup]:
+    def get_system_status_report(self, user_id: int = 0) -> Tuple[str, InlineKeyboardMarkup]:
+        is_admin = (user_id in config.admin_ids)
         active_jobs = db.get_active_queue()
         if not active_jobs and not LIVE_TRANSFERS:
             text = "🟢 **Sistem Boşta.**\nAktif veya bekleyen indirme/yükleme işlemi yok."
@@ -1098,7 +1100,8 @@ class DiziBotManager:
                     f"• İşlem ID: `#{job_id}`\n\n"
                 )
                 live_shown += 1
-                buttons.append([InlineKeyboardButton(f"❌ #{job_id} İptal Et", callback_data=f"cancel_job:{job_id}")])
+                if is_admin:
+                    buttons.append([InlineKeyboardButton(f"❌ #{job_id} İptal Et", callback_data=f"cancel_job:{job_id}")])
             elif t_info and t_info.get("phase") in ["muxing", "preparing"]:
                 text += (
                     f"🎬 **{disp_title}**\n"
@@ -1107,7 +1110,8 @@ class DiziBotManager:
                     f"• İşlem ID: `#{job_id}`\n\n"
                 )
                 live_shown += 1
-                buttons.append([InlineKeyboardButton(f"❌ #{job_id} İptal Et", callback_data=f"cancel_job:{job_id}")])
+                if is_admin:
+                    buttons.append([InlineKeyboardButton(f"❌ #{job_id} İptal Et", callback_data=f"cancel_job:{job_id}")])
             elif t_info and t_info.get("phase") == "splitting":
                 text += (
                     f"🎬 **{disp_title}**\n"
@@ -1116,7 +1120,8 @@ class DiziBotManager:
                     f"• İşlem ID: `#{job_id}`\n\n"
                 )
                 live_shown += 1
-                buttons.append([InlineKeyboardButton(f"❌ #{job_id} İptal Et", callback_data=f"cancel_job:{job_id}")])
+                if is_admin:
+                    buttons.append([InlineKeyboardButton(f"❌ #{job_id} İptal Et", callback_data=f"cancel_job:{job_id}")])
             elif t_info and t_info.get("phase") == "downloading":
                 pct_f = min(1.0, max(0.0, float(t_info.get("progress") or p_val)))
                 pct = int(pct_f * 100)
@@ -1131,7 +1136,8 @@ class DiziBotManager:
                     f"• İşlem ID: `#{job_id}`\n\n"
                 )
                 live_shown += 1
-                buttons.append([InlineKeyboardButton(f"❌ #{job_id} İptal Et", callback_data=f"cancel_job:{job_id}")])
+                if is_admin:
+                    buttons.append([InlineKeyboardButton(f"❌ #{job_id} İptal Et", callback_data=f"cancel_job:{job_id}")])
             elif live_shown < 3:
                 pct_f = min(1.0, max(0.0, p_val))
                 p_bar = "▓" * int(pct_f * 10) + "░" * (10 - int(pct_f * 10))
@@ -1142,21 +1148,24 @@ class DiziBotManager:
                     f"• İşlem ID: `#{job_id}`\n\n"
                 )
                 live_shown += 1
+                if is_admin:
+                    buttons.append([InlineKeyboardButton(f"❌ #{job_id} İptal Et", callback_data=f"cancel_job:{job_id}")])
 
         queued_remaining = len(active_jobs) - live_shown
         if queued_remaining > 0:
             text += f"📋 **Sırada Bekleyen:** `{queued_remaining}` ek işlem kuyrukta.\n\n"
 
-        # Disk Bilgisi
-        try:
-            total, used, free = shutil.disk_usage(TEMP_DIR)
-            text += f"💾 **Disk Alanı:** `{free / (1024**3):.1f} GB Boş` / `{total / (1024**3):.1f} GB`\n"
-        except Exception:
-            pass
+        # Disk Bilgisi (Sadece Adminlere Gösterilsin)
+        if is_admin:
+            try:
+                total, used, free = shutil.disk_usage(TEMP_DIR)
+                text += f"💾 **Disk Alanı:** `{free / (1024**3):.1f} GB Boş` / `{total / (1024**3):.1f} GB`\n"
+            except Exception:
+                pass
 
         # Kontrol Butonları
         ctrl_row = [InlineKeyboardButton("🔄 Canlı Yenile", callback_data="status_ref")]
-        if active_jobs:
+        if is_admin and active_jobs:
             ctrl_row.insert(0, InlineKeyboardButton("🛑 Tüm Kuyruğu Temizle", callback_data="cancel_all"))
         buttons.append(ctrl_row)
 
