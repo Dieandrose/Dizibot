@@ -476,6 +476,13 @@ class Downloader:
                                 variants.sort(key=lambda x: x[1])
                                 video_target_url = variants[0][2]
 
+                    # Sessiz video (Audio olmayan) varyant kontrolü
+                    has_codecs_attr = any("CODECS=" in l for l in lines)
+                    has_audio_codec = any(re.search(r'CODECS="[^"]*(mp4a|aac|ac-3|ec-3|opus)', l, re.IGNORECASE) for l in lines)
+                    if has_codecs_attr and not has_audio_codec and not audio_tr_url:
+                        logger.warning("⚠️ M3U8 Master Playlist'te ses akışı veya ses codeci bulunamadı (Sessiz Kaynak).")
+                        return {"success": False}
+
             # Segmentleri ve Varsa AES-128 Şifre Anahtarını Çıkar
             async def get_segments_and_key(url: str):
                 try:
@@ -538,7 +545,7 @@ class Downloader:
                 if total == 0:
                     return
 
-                sem = asyncio.Semaphore(35 if is_video else 50)
+                sem = asyncio.Semaphore(45 if is_video else 80)
                 nonlocal done_all_chunks
 
                 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -611,7 +618,7 @@ class Downloader:
                     except Exception:
                         pass
 
-            # FFmpeg ile Anında Senkron Birleştirme (Kayıpsız Video + Otomatik PTS Senkronlu Ses)
+            # FFmpeg ile Anında Kayıpsız Birleştirme (Instant Stream Copy - 2-3 sn)
             if tmp_audio_tr_file and tmp_audio_tr_file.exists() and tmp_audio_tr_file.stat().st_size > 0:
                 cmd = [
                     "ffmpeg", "-y",
@@ -621,9 +628,7 @@ class Downloader:
                     "-i", str(tmp_audio_tr_file),
                     "-map", "0:v:0",
                     "-map", "1:a:0",
-                    "-c:v", "copy",
-                    "-c:a", "aac", "-b:a", "192k",
-                    "-af", "aresample=async=1",
+                    "-c", "copy",
                     "-avoid_negative_ts", "make_zero",
                     "-shortest",
                     "-movflags", "+faststart",
@@ -737,12 +742,10 @@ class Downloader:
             part_file = input_path.with_name(f"{input_path.stem}_part{i+1}.mp4")
             cmd = [
                 "ffmpeg", "-y", "-threads", "0",
-                "-i", str(input_path),
                 "-ss", f"{ss:.2f}",
+                "-i", str(input_path),
                 "-t", f"{t:.2f}",
-                "-c:v", "copy",
-                "-c:a", "aac", "-b:a", "192k",
-                "-af", "aresample=async=1",
+                "-c", "copy",
                 "-avoid_negative_ts", "make_zero",
                 "-movflags", "+faststart",
                 str(part_file)
