@@ -456,18 +456,24 @@ class Downloader:
                                 break
 
                 if variants:
-                    pref_720 = [v for v in variants if v[0] == 720]
-                    if pref_720:
-                        pref_720.sort(key=lambda x: x[1])
-                        video_target_url = pref_720[0][2]
+                    # Telegram limitini (2GB) aşmayacak en kaliteli varyantı seç (1500k-2400k arası 720p/1080p)
+                    v_fit = [v for v in variants if (v[1] <= 2400000 or v[1] == 0) and v[0] >= 720]
+                    if v_fit:
+                        v_fit.sort(key=lambda x: (x[0], x[1]), reverse=True)
+                        video_target_url = v_fit[0][2]
                     else:
-                        under_720 = [v for v in variants if 480 <= v[0] < 720]
-                        if under_720:
-                            under_720.sort(key=lambda x: x[0], reverse=True)
-                            video_target_url = under_720[0][2]
+                        v_720 = [v for v in variants if v[0] == 720]
+                        if v_720:
+                            v_720.sort(key=lambda x: x[1])
+                            video_target_url = v_720[0][2]
                         else:
-                            variants.sort(key=lambda x: x[1])
-                            video_target_url = variants[0][2]
+                            v_under = [v for v in variants if 480 <= v[0] <= 1080]
+                            if v_under:
+                                v_under.sort(key=lambda x: x[1])
+                                video_target_url = v_under[0][2]
+                            else:
+                                variants.sort(key=lambda x: x[1])
+                                video_target_url = variants[0][2]
 
             # Segmentleri ve Varsa AES-128 Şifre Anahtarını Çıkar
             async def get_segments_and_key(url: str):
@@ -528,8 +534,7 @@ class Downloader:
                 if total == 0:
                     return
 
-                batch_size = 25
-                sem = asyncio.Semaphore(20)
+                sem = asyncio.Semaphore(35)
                 done = 0
 
                 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -561,18 +566,22 @@ class Downloader:
                                             progress_cb(done / total)
                                     return idx, chunk_data
                             except Exception:
-                                await asyncio.sleep(0.3 + retry * 0.3)
+                                await asyncio.sleep(0.2 + retry * 0.2)
                         return idx, b""
 
+                completed_chunks = {}
+                next_write_idx = 0
+                tasks = [asyncio.create_task(fetch_seg(i, seg_list[i])) for i in range(total)]
+
                 with open(dest_file, "wb") as f_out:
-                    for b_start in range(0, total, batch_size):
-                        b_end = min(total, b_start + batch_size)
-                        tasks = [fetch_seg(i, seg_list[i]) for i in range(b_start, b_end)]
-                        batch_results = await asyncio.gather(*tasks)
-                        batch_results.sort(key=lambda x: x[0])
-                        for _, chunk in batch_results:
-                            if chunk:
-                                f_out.write(chunk)
+                    for fut in asyncio.as_completed(tasks):
+                        idx, chunk = await fut
+                        completed_chunks[idx] = chunk
+                        while next_write_idx in completed_chunks:
+                            c = completed_chunks.pop(next_write_idx)
+                            if c:
+                                f_out.write(c)
+                            next_write_idx += 1
 
             logger.info(f"HLS İndiriliyor (Hızlı): Video={len(video_segs)} parça" + (f", Ses={len(audio_tr_segs)} parça" if audio_tr_segs else ""))
             dl_tasks = [download_seg_list(video_segs, tmp_video_file, key_bytes=v_key_bytes, key_iv=v_key_iv, is_video=True)]
@@ -688,7 +697,8 @@ class Downloader:
 
             cmd = [
                 "ffmpeg", "-y", "-threads", "0", "-i", str(input_path),
-                "-c:v", "libx264", "-preset", "ultrafast",
+                "-vf", "scale=-2:min(ih\\,720)",
+                "-c:v", "libx264", "-preset", "ultrafast", "-tune", "fastdecode",
                 "-b:v", str(target_v_bitrate),
                 "-maxrate", str(int(target_v_bitrate * 1.3)),
                 "-bufsize", str(int(target_v_bitrate * 2)),
