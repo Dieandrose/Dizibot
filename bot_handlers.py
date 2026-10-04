@@ -1248,97 +1248,108 @@ class DiziBotManager:
                 if db.is_job_cancelled(job_id):
                     break
 
-                # Boyut Kontrolü (< 1950 MB) - Aşarsa Otomatik Optimize Et
+                # 2GB Sınırı Kontrolü - Kayıpsız Bölme (Part 1 / Part 2)
                 f_size = temp_file.stat().st_size
                 if f_size > config.max_file_size_bytes:
-                    logger.info(f"[{p_name}] Dosya boyutu Telegram limitini aşıyor ({f_size / (1024*1024):.1f} MB), <1.9GB için optimize ediliyor...")
+                    logger.info(f"[{p_name}] Video 2GB limitini aşıyor ({f_size / (1024*1024):.1f} MB), kayıpsız bölünüyor...")
                     LIVE_TRANSFERS[job_id] = {
                         "title": disp_title,
-                        "phase": "compressing",
+                        "phase": "splitting",
                         "progress": 0.74,
                         "updated_at": time.time()
                     }
-                    opt_file = temp_file.with_name(f"opt_{temp_file.name}")
-                    opt_ok = await Downloader.compress_video_to_limit(temp_file, opt_file, target_mb=1850)
-                    if opt_ok and opt_file.exists():
-                        temp_file.unlink(missing_ok=True)
-                        temp_file = opt_file
-                        f_size = temp_file.stat().st_size
-                        logger.info(f"[{p_name}] Video optimize edildi: {f_size / (1024*1024):.1f} MB")
-                    else:
-                        logger.warning(f"[{p_name}] Optimizasyon başarısız, alternatif aranıyor...")
-                        temp_file.unlink(missing_ok=True)
-                        continue
-
-                # Thumbnail Çıkart
-                thumb_path = await Downloader.extract_thumbnail(temp_file)
-
-                if db.is_job_cancelled(job_id):
-                    break
-
-                # Telegram'a Yükle (Canlı İlerleme Takibi)
-                db.update_queue_progress(job_id, "uploading", 0.75)
-                logger.info(f"Telegram Konusuna Yükleniyor: '{disp_title}' (Topic: {topic_id})")
-
-                upload_start = time.time()
-                last_db_up = 0.0
-
-                async def upload_prog(current: int, total: int):
-                    if db.is_job_cancelled(job_id):
-                        raise asyncio.CancelledError(f"İşlem #{job_id} iptal edildi")
-                    nonlocal last_db_up
-                    now = time.time()
-                    pct = current / total if total > 0 else 0.0
-                    elapsed = max(0.1, now - upload_start)
-                    speed_mb = (current / (1024 * 1024)) / elapsed
-                    LIVE_TRANSFERS[job_id] = {
-                        "title": disp_title,
-                        "phase": "uploading",
-                        "current": current,
-                        "total": total,
-                        "speed_mb": speed_mb,
-                        "progress": pct,
-                        "updated_at": now
-                    }
-                    if now - last_db_up >= 3.0 or current == total:
-                        last_db_up = now
-                        db.update_queue_progress(job_id, "uploading", 0.75 + pct * 0.25)
-
-                if is_movie:
-                    caption = (
-                        f"🎬 **{clean_title}**\n\n"
-                        f"📌 **Tür:** Film\n"
-                        f"📦 **Boyut:** {f_size / (1024*1024):.1f} MB\n\n"
-                        f"🌐 **Daha Fazlası İçin :**  izle.darkbox.com.tr:9443"
-                    )
+                    parts_to_upload = await Downloader.split_video_lossless(temp_file)
                 else:
-                    caption = (
-                        f"🎬 **{clean_title}**\n"
-                        f"📌 **{season}. Sezon {episode}. Bölüm**\n"
-                        f"📦 **Boyut:** {f_size / (1024*1024):.1f} MB\n\n"
-                        f"🌐 **Daha Fazlası İçin :**  izle.darkbox.com.tr:9443"
-                    )
+                    parts_to_upload = [temp_file]
+
+                if not parts_to_upload:
+                    logger.warning(f"[{p_name}] Video parçalama başarısız oldu, sonraki kaynağa geçiliyor...")
+                    continue
+
+                total_parts = len(parts_to_upload)
+                last_msg_id = 0
+                total_bytes_sent = 0
 
                 try:
-                    sent_msg = await self.app.send_video(
-                        chat_id=config.target_chat_id,
-                        video=str(temp_file),
-                        caption=caption,
-                        thumb=str(thumb_path) if thumb_path else None,
-                        supports_streaming=True,
-                        reply_to_message_id=topic_id if topic_id > 0 else None,
-                        progress=upload_prog
-                    )
-                    msg_id = sent_msg.id if sent_msg else 0
-                    db.log_upload(p_name, cand.get("ep_url", ""), disp_title, season, episode, "uploaded", msg_id, f_size)
-                    db.update_queue_progress(job_id, "completed", 1.0)
-                    uploaded_ok = True
-                    logger.info(f"✅ Başarıyla Yüklendi! Mesaj ID: {msg_id}")
-                    
-                    # İşlem Sonrası Otomatik Eksik Bölüm Kontrolü (Sadece Diziler için)
-                    if not is_movie:
-                        asyncio.create_task(self._auto_heal_hook(clean_title, season))
-                    break
+                    for part_idx, part_file in enumerate(parts_to_upload, 1):
+                        if db.is_job_cancelled(job_id):
+                            break
+
+                        part_fsize = part_file.stat().st_size
+                        total_bytes_sent += part_fsize
+                        part_thumb = await Downloader.extract_thumbnail(part_file)
+
+                        part_tag = f" `[Parça {part_idx}/{total_parts}]`" if total_parts > 1 else ""
+                        if is_movie:
+                            caption = (
+                                f"🎬 **{clean_title}**{part_tag}\n\n"
+                                f"📌 **Tür:** Film\n"
+                                f"📦 **Boyut:** {part_fsize / (1024*1024):.1f} MB\n\n"
+                                f"🌐 **Daha Fazlası İçin :**  izle.darkbox.com.tr:9443"
+                            )
+                        else:
+                            caption = (
+                                f"🎬 **{clean_title}**{part_tag}\n"
+                                f"📌 **{season}. Sezon {episode}. Bölüm**\n"
+                                f"📦 **Boyut:** {part_fsize / (1024*1024):.1f} MB\n\n"
+                                f"🌐 **Daha Fazlası İçin :**  izle.darkbox.com.tr:9443"
+                            )
+
+                        # Telegram'a Yükle (Canlı İlerleme Takibi)
+                        db.update_queue_progress(job_id, "uploading", 0.75 + ((part_idx - 1) / total_parts) * 0.25)
+                        logger.info(f"Telegram Konusuna Yükleniyor: '{disp_title}'{part_tag} (Topic: {topic_id})")
+
+                        upload_start = time.time()
+                        last_db_up = 0.0
+
+                        async def upload_prog(current: int, total: int):
+                            if db.is_job_cancelled(job_id):
+                                raise asyncio.CancelledError(f"İşlem #{job_id} iptal edildi")
+                            nonlocal last_db_up
+                            now = time.time()
+                            pct = current / total if total > 0 else 0.0
+                            elapsed = max(0.1, now - upload_start)
+                            speed_mb = (current / (1024 * 1024)) / elapsed
+                            LIVE_TRANSFERS[job_id] = {
+                                "title": f"{disp_title}{part_tag}",
+                                "phase": "uploading",
+                                "current": current,
+                                "total": total,
+                                "speed_mb": speed_mb,
+                                "progress": pct,
+                                "updated_at": now
+                            }
+                            if now - last_db_up >= 3.0 or current == total:
+                                last_db_up = now
+                                base_prog = 0.75 + ((part_idx - 1) / total_parts) * 0.25
+                                part_contrib = (pct / total_parts) * 0.25
+                                db.update_queue_progress(job_id, "uploading", base_prog + part_contrib)
+
+                        sent_msg = await self.app.send_video(
+                            chat_id=config.target_chat_id,
+                            video=str(part_file),
+                            caption=caption,
+                            thumb=str(part_thumb) if part_thumb else None,
+                            supports_streaming=True,
+                            reply_to_message_id=topic_id if topic_id > 0 else None,
+                            progress=upload_prog
+                        )
+                        if sent_msg:
+                            last_msg_id = sent_msg.id
+                        part_file.unlink(missing_ok=True)
+                        if part_thumb:
+                            part_thumb.unlink(missing_ok=True)
+
+                    if last_msg_id > 0:
+                        db.log_upload(p_name, cand.get("ep_url", ""), disp_title, season, episode, "uploaded", last_msg_id, total_bytes_sent)
+                        db.update_queue_progress(job_id, "completed", 1.0)
+                        uploaded_ok = True
+                        logger.info(f"✅ Başarıyla Yüklendi! Son Mesaj ID: {last_msg_id}")
+                        
+                        # İşlem Sonrası Otomatik Eksik Bölüm Kontrolü (Sadece Diziler için)
+                        if not is_movie:
+                            asyncio.create_task(self._auto_heal_hook(clean_title, season))
+                        break
                 except asyncio.CancelledError:
                     raise
                 except Exception as upload_err:
@@ -1346,8 +1357,11 @@ class DiziBotManager:
                 finally:
                     if temp_file.exists():
                         temp_file.unlink(missing_ok=True)
-                    if thumb_path and thumb_path.exists():
-                        thumb_path.unlink(missing_ok=True)
+                    for p in TEMP_DIR.glob(f"job_{job_id}_*"):
+                        try:
+                            p.unlink(missing_ok=True)
+                        except Exception:
+                            pass
 
             if not uploaded_ok and not db.is_job_cancelled(job_id):
                 db.update_queue_progress(job_id, "failed", error_msg="Tüm alternatif akışlar başarısız oldu")

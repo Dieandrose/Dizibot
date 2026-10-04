@@ -672,8 +672,15 @@ class Downloader:
         return thumb_path if thumb_path.exists() else None
 
     @classmethod
-    async def compress_video_to_limit(cls, input_path: Path, output_path: Path, target_mb: int = 1850) -> bool:
-        """2GB sınırını aşan videoları Telegram limitine (<1.9GB) optimize eder."""
+    async def split_video_lossless(cls, input_path: Path, max_bytes: int = 1950 * 1024 * 1024) -> List[Path]:
+        """2GB sınırını aşan videoları FFmpeg -c copy ile anında (0.5 sn) kayıpsız parçalara (Part 1, Part 2) böler."""
+        if not input_path.exists():
+            return []
+
+        f_size = input_path.stat().st_size
+        if f_size <= max_bytes:
+            return [input_path]
+
         try:
             probe_cmd = [
                 "ffprobe", "-v", "error", 
@@ -683,32 +690,45 @@ class Downloader:
             ]
             proc = await asyncio.create_subprocess_exec(*probe_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
             stdout, _ = await proc.communicate()
-            try:
-                duration = float(stdout.decode().strip())
-            except Exception:
-                duration = 7200.0
+            duration = float(stdout.decode().strip())
+        except Exception:
+            duration = 7200.0
 
-            if duration <= 0:
-                duration = 7200.0
+        if duration <= 0:
+            duration = 7200.0
 
-            target_total_bits = target_mb * 8 * 1024 * 1024
-            target_v_bitrate = int((target_total_bits / duration) - 128000)
-            target_v_bitrate = max(500000, target_v_bitrate)
+        import math
+        num_parts = math.ceil(f_size / (1850 * 1024 * 1024))
+        num_parts = max(2, num_parts)
+        part_duration = duration / num_parts
 
+        logger.info(f"Video {f_size / (1024*1024):.1f} MB (>2GB), kayıpsız olarak {num_parts} parçaya bölünüyor...")
+
+        part_paths = []
+        for i in range(num_parts):
+            ss = i * part_duration
+            t = part_duration
+            part_file = input_path.with_name(f"{input_path.stem}_part{i+1}.mp4")
             cmd = [
-                "ffmpeg", "-y", "-threads", "0", "-i", str(input_path),
-                "-vf", "scale=-2:min(ih\\,720)",
-                "-c:v", "libx264", "-preset", "ultrafast", "-tune", "fastdecode",
-                "-b:v", str(target_v_bitrate),
-                "-maxrate", str(int(target_v_bitrate * 1.3)),
-                "-bufsize", str(int(target_v_bitrate * 2)),
-                "-c:a", "copy",
+                "ffmpeg", "-y", "-threads", "0",
+                "-ss", f"{ss:.2f}",
+                "-t", f"{t:.2f}",
+                "-i", str(input_path),
+                "-c", "copy",
+                "-avoid_negative_ts", "make_zero",
                 "-movflags", "+faststart",
-                str(output_path)
+                str(part_file)
             ]
             proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
             await proc.communicate()
-            return output_path.exists() and output_path.stat().st_size > 1024 * 1024
-        except Exception as e:
-            logger.error(f"Video optimize hatası: {e}")
-            return False
+            if part_file.exists() and part_file.stat().st_size > 1024 * 1024:
+                part_paths.append(part_file)
+
+        if len(part_paths) == num_parts:
+            input_path.unlink(missing_ok=True)
+            logger.info(f"Kayıpsız bölme tamamlandı: {len(part_paths)} parça oluşturuldu.")
+            return part_paths
+        else:
+            for p in part_paths:
+                p.unlink(missing_ok=True)
+            return [input_path]
