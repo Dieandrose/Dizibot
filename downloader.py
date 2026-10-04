@@ -687,8 +687,8 @@ class Downloader:
             target_v_bitrate = max(500000, target_v_bitrate)
 
             cmd = [
-                "ffmpeg", "-y", "-i", str(input_path),
-                "-c:v", "libx264", "-preset", "veryfast",
+                "ffmpeg", "-y", "-threads", "0", "-i", str(input_path),
+                "-c:v", "libx264", "-preset", "ultrafast",
                 "-b:v", str(target_v_bitrate),
                 "-maxrate", str(int(target_v_bitrate * 1.3)),
                 "-bufsize", str(int(target_v_bitrate * 2)),

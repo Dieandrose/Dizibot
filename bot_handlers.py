@@ -1045,6 +1045,15 @@ class DiziBotManager:
                 )
                 live_shown += 1
                 buttons.append([InlineKeyboardButton(f"❌ #{job_id} İptal Et", callback_data=f"cancel_job:{job_id}")])
+            elif t_info and t_info.get("phase") == "compressing":
+                text += (
+                    f"🎬 **{disp_title}**\n"
+                    f"• Aşama: 📦 `BOYUT OPTİMİZASYONU` (<2GB)\n"
+                    f"• Durum: `⚡ Video Telegram'ın 2GB limitini aştığı için sıkıştırılıyor...`\n"
+                    f"• İşlem ID: `#{job_id}`\n\n"
+                )
+                live_shown += 1
+                buttons.append([InlineKeyboardButton(f"❌ #{job_id} İptal Et", callback_data=f"cancel_job:{job_id}")])
             elif t_info and t_info.get("phase") == "muxing":
                 text += (
                     f"🎬 **{disp_title}**\n"
@@ -1243,6 +1252,12 @@ class DiziBotManager:
                 f_size = temp_file.stat().st_size
                 if f_size > config.max_file_size_bytes:
                     logger.info(f"[{p_name}] Dosya boyutu Telegram limitini aşıyor ({f_size / (1024*1024):.1f} MB), <1.9GB için optimize ediliyor...")
+                    LIVE_TRANSFERS[job_id] = {
+                        "title": disp_title,
+                        "phase": "compressing",
+                        "progress": 0.74,
+                        "updated_at": time.time()
+                    }
                     opt_file = temp_file.with_name(f"opt_{temp_file.name}")
                     opt_ok = await Downloader.compress_video_to_limit(temp_file, opt_file, target_mb=1850)
                     if opt_ok and opt_file.exists():
