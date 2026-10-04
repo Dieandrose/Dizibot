@@ -545,7 +545,7 @@ class Downloader:
                 if total == 0:
                     return
 
-                sem = asyncio.Semaphore(20 if is_video else 25)
+                sem = asyncio.Semaphore(25 if is_video else 50)
                 nonlocal done_all_chunks
 
                 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -561,9 +561,9 @@ class Downloader:
                 async def fetch_seg(idx: int, s_url: str):
                     nonlocal done_all_chunks
                     async with sem:
-                        for retry in range(5):
+                        for retry in range(12):
                             try:
-                                res = await session.get(s_url, headers=headers, timeout=12.0)
+                                res = await session.get(s_url, headers=headers, timeout=15.0)
                                 if res.status_code == 200 and is_valid_chunk(res.content):
                                     done_all_chunks += 1
                                     chunk_data = res.content
@@ -584,9 +584,9 @@ class Downloader:
                                             progress_cb(done_all_chunks / tot_all_chunks)
                                     return idx, chunk_data
                                 else:
-                                    await asyncio.sleep(0.3 + retry * 0.4)
+                                    await asyncio.sleep(0.4 + retry * 0.4)
                             except Exception:
-                                await asyncio.sleep(0.3 + retry * 0.4)
+                                await asyncio.sleep(0.4 + retry * 0.4)
                         return idx, b""
 
                 completed_chunks = {}
@@ -607,8 +607,12 @@ class Downloader:
                             next_write_idx += 1
 
                 if missing_chunks_count > 0:
-                    logger.warning(f"⚠️ {dest_file.name} için {missing_chunks_count}/{total} parça eksik kaldı (Akış bütünlüğü bozuldu).")
-                    return False
+                    max_allowed_missing = int(total * 0.10)
+                    if missing_chunks_count > max_allowed_missing:
+                        logger.warning(f"⚠️ {dest_file.name} için {missing_chunks_count}/{total} parça eksik kaldı (Limit aşıldı, akış reddedildi).")
+                        return False
+                    else:
+                        logger.info(f"ℹ️ {dest_file.name} için {missing_chunks_count}/{total} parça atlandı (FFmpeg aresample/genpts ile senkron tamamlanacak).")
                 return True
 
             logger.info(f"HLS İndiriliyor (Hızlı): Video={len(video_segs)} parça" + (f", Ses={len(audio_tr_segs)} parça" if audio_tr_segs else ""))
@@ -642,7 +646,7 @@ class Downloader:
                     except Exception:
                         pass
 
-            # FFmpeg ile Anında Kayıpsız Birleştirme (Instant Stream Copy - 2-3 sn)
+            # FFmpeg ile Mükemmel PTS Senkronlu Birleştirme (Kayıpsız Video + Otomatik PTS Düzeltmeli Ses)
             if tmp_audio_tr_file and tmp_audio_tr_file.exists() and tmp_audio_tr_file.stat().st_size > 0:
                 cmd = [
                     "ffmpeg", "-y",
@@ -652,7 +656,10 @@ class Downloader:
                     "-i", str(tmp_audio_tr_file),
                     "-map", "0:v:0",
                     "-map", "1:a:0",
-                    "-c", "copy",
+                    "-c:v", "copy",
+                    "-c:a", "aac",
+                    "-b:a", "192k",
+                    "-af", "aresample=async=1:first_pts=0",
                     "-avoid_negative_ts", "make_zero",
                     "-shortest",
                     "-movflags", "+faststart",

@@ -40,7 +40,7 @@ class Config:
         self.session_name: str = str(DATA_DIR / "dizibot_session")
         self.target_chat_id: int = -1001909587016
         self.admin_ids: List[int] = [1080169172]  # Sahip / Admin Telegram ID
-        self.proxy: str = "http://127.0.0.1:4000"  # WARP / MASQUE Proxy
+        self.proxy: str = "socks5://127.0.0.1:4000"  # WARP / MASQUE Proxy
         self.check_interval_tracker: int = 900  # 15 dakika
         self.max_file_size_bytes: int = int(1950 * 1024 * 1024)  # 1.95 GB
         self.max_concurrent_workers: int = 1  # Sıralı ve hatasız yükleme için tekil işlem
