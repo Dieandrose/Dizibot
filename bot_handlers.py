@@ -1196,9 +1196,11 @@ class DiziBotManager:
             except Exception as direct_err:
                 logger.debug(f"Doğrudan kaynak çözme hatası ({p_direct}): {direct_err}")
 
-        # Eğer doğrudan kaynaktan link bulunamadıysa fallback olarak tüm eklentileri ara
-        if not candidates:
-            candidates = await Downloader.find_all_candidate_streams(clean_title, season, episode)
+        # Doğrudan seçilen eklentinin adaylarını öncelikli tut, diğer tüm eklentileri arkasına kesintisiz fallback olarak ekle
+        all_fallbacks = await Downloader.find_all_candidate_streams(clean_title, season, episode)
+        for fb in all_fallbacks:
+            if not any(c.get("url") == fb.get("url") for c in candidates):
+                candidates.append(fb)
 
         if not candidates:
             logger.warning(f"#{job_id} için akış kaynağı bulunamadı.")
