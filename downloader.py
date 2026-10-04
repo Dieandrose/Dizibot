@@ -397,6 +397,22 @@ class Downloader:
             video_target_url = None
             audio_tr_url = None
 
+            def safe_urljoin(base_url: str, rel_url: str) -> str:
+                if not rel_url:
+                    return base_url
+                joined = urllib.parse.urljoin(base_url, rel_url)
+                base_parsed = urllib.parse.urlparse(base_url)
+                joined_parsed = urllib.parse.urlparse(joined)
+                if base_parsed.query:
+                    base_qs = urllib.parse.parse_qs(base_parsed.query)
+                    joined_qs = urllib.parse.parse_qs(joined_parsed.query)
+                    for k, v in base_qs.items():
+                        if k not in joined_qs:
+                            joined_qs[k] = v
+                    new_q = urllib.parse.urlencode(joined_qs, doseq=True)
+                    joined = urllib.parse.urlunparse(joined_parsed._replace(query=new_q))
+                return joined
+
             # Master Playlist kontrolü
             if any("#EXT-X-STREAM-INF" in l for l in lines) or any("#EXT-X-MEDIA:TYPE=" in l for l in lines):
                 # Tekil Ses Akışı Tespiti (Varsa Türkçe veya Birincil Ses)
@@ -406,7 +422,7 @@ class Downloader:
                         m_name = re.search(r'NAME=["\']?([^"\',]+)["\']?', l)
                         m_lang = re.search(r'LANGUAGE=["\']?([^"\',]+)["\']?', l)
                         if m_uri:
-                            u = urllib.parse.urljoin(stream_url, m_uri.group(1))
+                            u = safe_urljoin(stream_url, m_uri.group(1))
                             name = (m_name.group(1) if m_name else "").lower()
                             lang = (m_lang.group(1) if m_lang else "").lower()
                             if any(x in name or x in lang for x in ["tur", "türk", "turkish", "tr", "dublaj"]):
@@ -435,7 +451,7 @@ class Downloader:
 
                         for next_idx in range(i + 1, min(i + 5, len(lines))):
                             if not lines[next_idx].startswith("#"):
-                                v_url = urllib.parse.urljoin(stream_url, lines[next_idx])
+                                v_url = safe_urljoin(stream_url, lines[next_idx])
                                 variants.append((h, bw, v_url))
                                 break
 
@@ -453,26 +469,46 @@ class Downloader:
                             variants.sort(key=lambda x: x[1])
                             video_target_url = variants[0][2]
 
-            # Segmentleri İndir
-            async def get_segments(url: str) -> List[str]:
+            # Segmentleri ve Varsa AES-128 Şifre Anahtarını Çıkar
+            async def get_segments_and_key(url: str):
                 try:
                     r = await session.get(url, headers=headers, timeout=10.0)
                     if r.status_code != 200:
-                        return []
+                        return [], None, None
+                    m_lines = [ln.strip() for ln in r.text.splitlines() if ln.strip()]
+                    
+                    key_bytes = None
+                    key_iv = None
+                    for ln in m_lines:
+                        if ln.startswith("#EXT-X-KEY:"):
+                            m_method = re.search(r'METHOD=([^,\s]+)', ln)
+                            m_uri = re.search(r'URI=["\']?([^"\',]+)["\']?', ln)
+                            m_iv = re.search(r'IV=0x([0-9a-fA-F]+)', ln)
+                            if m_method and m_method.group(1) == "AES-128" and m_uri:
+                                key_url = safe_urljoin(url, m_uri.group(1))
+                                try:
+                                    rk = await session.get(key_url, headers=headers, timeout=8.0)
+                                    if rk.status_code == 200 and len(rk.content) == 16:
+                                        key_bytes = rk.content
+                                        if m_iv:
+                                            key_iv = bytes.fromhex(m_iv.group(1))
+                                except Exception as ke:
+                                    logger.debug(f"AES Key indirme hatası: {ke}")
+                                    
                     seg_urls = []
-                    for ln in r.text.splitlines():
-                        ln = ln.strip()
-                        if ln and not ln.startswith("#"):
-                            seg_urls.append(urllib.parse.urljoin(url, ln))
-                    return seg_urls
-                except Exception:
-                    return []
+                    for ln in m_lines:
+                        if not ln.startswith("#"):
+                            seg_urls.append(safe_urljoin(url, ln))
+                    return seg_urls, key_bytes, key_iv
+                except Exception as e:
+                    logger.debug(f"get_segments_and_key hatası: {e}")
+                    return [], None, None
 
             if not video_target_url:
                 video_target_url = stream_url
 
-            video_segs = await get_segments(video_target_url)
-            audio_tr_segs = await get_segments(audio_tr_url) if audio_tr_url else []
+            video_segs, v_key_bytes, v_key_iv = await get_segments_and_key(video_target_url)
+            audio_tr_segs, a_key_bytes, a_key_iv = (await get_segments_and_key(audio_tr_url)) if audio_tr_url else ([], None, None)
 
             if not video_segs:
                 logger.warning("HLS video segmentleri bulunamadı.")
@@ -481,7 +517,13 @@ class Downloader:
             tmp_video_file = output_path.with_suffix(".vraw.ts")
             tmp_audio_tr_file = output_path.with_suffix(".atr.ts") if audio_tr_segs else None
 
-            async def download_seg_list(seg_list: List[str], dest_file: Path, is_video: bool = True):
+            async def download_seg_list(
+                seg_list: List[str], 
+                dest_file: Path, 
+                key_bytes: Optional[bytes] = None, 
+                key_iv: Optional[bytes] = None, 
+                is_video: bool = True
+            ):
                 total = len(seg_list)
                 if total == 0:
                     return
@@ -489,6 +531,9 @@ class Downloader:
                 batch_size = 25
                 sem = asyncio.Semaphore(20)
                 done = 0
+
+                from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+                from cryptography.hazmat.backends import default_backend
 
                 async def fetch_seg(idx: int, s_url: str):
                     nonlocal done
@@ -498,12 +543,23 @@ class Downloader:
                                 res = await session.get(s_url, headers=headers, timeout=10.0)
                                 if res.status_code == 200 and len(res.content) > 0:
                                     done += 1
+                                    chunk_data = res.content
+                                    # AES-128 Şifre Çözme
+                                    if key_bytes:
+                                        try:
+                                            iv = key_iv if key_iv else idx.to_bytes(16, 'big')
+                                            cipher = Cipher(algorithms.AES(key_bytes), modes.CBC(iv), backend=default_backend())
+                                            decryptor = cipher.decryptor()
+                                            chunk_data = decryptor.update(chunk_data) + decryptor.finalize()
+                                        except Exception as dec_err:
+                                            logger.debug(f"Segment #{idx} AES çözme hatası: {dec_err}")
+                                            
                                     if is_video and progress_cb and total > 0 and done % 10 == 0:
                                         try:
                                             progress_cb(done / total, done, total)
                                         except TypeError:
                                             progress_cb(done / total)
-                                    return idx, res.content
+                                    return idx, chunk_data
                             except Exception:
                                 await asyncio.sleep(0.3 + retry * 0.3)
                         return idx, b""
@@ -519,9 +575,9 @@ class Downloader:
                                 f_out.write(chunk)
 
             logger.info(f"HLS İndiriliyor (Hızlı): Video={len(video_segs)} parça" + (f", Ses={len(audio_tr_segs)} parça" if audio_tr_segs else ""))
-            dl_tasks = [download_seg_list(video_segs, tmp_video_file, is_video=True)]
+            dl_tasks = [download_seg_list(video_segs, tmp_video_file, key_bytes=v_key_bytes, key_iv=v_key_iv, is_video=True)]
             if audio_tr_segs and tmp_audio_tr_file:
-                dl_tasks.append(download_seg_list(audio_tr_segs, tmp_audio_tr_file, is_video=False))
+                dl_tasks.append(download_seg_list(audio_tr_segs, tmp_audio_tr_file, key_bytes=a_key_bytes, key_iv=a_key_iv, is_video=False))
             
             await asyncio.gather(*dl_tasks)
 
