@@ -63,6 +63,39 @@ class DiziBotManager:
         self._register_handlers()
         self.is_processing_queue = False
 
+    def render_search_keyboard(self, results: list, page: int = 0, query_title: str = "") -> tuple[str, InlineKeyboardMarkup]:
+        """Arama sonuçlarını 10'arlı sayfalar halinde butonlu klavyeye dönüştürür."""
+        page_size = 10
+        total = len(results)
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        page = max(0, min(page, total_pages - 1))
+
+        start_idx = page * page_size
+        end_idx = min(start_idx + page_size, total)
+        page_items = results[start_idx:end_idx]
+
+        buttons = []
+        for idx_offset, r in enumerate(page_items):
+            global_idx = start_idx + idx_offset
+            title = r.get("title", "İçerik")
+            plugin = r.get("plugin_name", "Kaynak")
+            buttons.append([InlineKeyboardButton(f"🎬 {title} [{plugin}]", callback_data=f"sel_res:{global_idx}")])
+
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton("◀️ Önceki", callback_data=f"search_page:{page-1}"))
+        if total_pages > 1:
+            nav_row.append(InlineKeyboardButton(f"📄 {page+1}/{total_pages}", callback_data="noop"))
+        if page < total_pages - 1:
+            nav_row.append(InlineKeyboardButton("Sonraki ▶️", callback_data=f"search_page:{page+1}"))
+
+        if nav_row:
+            buttons.append(nav_row)
+
+        header = f"🎯 **'{query_title}'** için **{total}** kaynak bulundu" if query_title else f"🎯 Toplam **{total}** kaynak bulundu"
+        text = f"{header} (Sayfa {page+1}/{total_pages}):\nİndirmek istediğiniz sunucu ve içeriği seçin:"
+        return text, InlineKeyboardMarkup(buttons)
+
     async def get_or_create_series_topic(self, series_title: str, is_movie: bool = False) -> int:
         if is_movie:
             target_key = "Filmler"
@@ -181,14 +214,8 @@ class DiziBotManager:
                 return
 
             SEARCH_CACHE[str(message.from_user.id)] = results
-            buttons = []
-            for idx, r in enumerate(results[:25]):
-                title = r.get("title", "İçerik")
-                plugin = r.get("plugin_name", "Kaynak")
-                buttons.append([InlineKeyboardButton(f"🎬 {title} [{plugin}]", callback_data=f"sel_res:{idx}")])
-
-            keyboard = InlineKeyboardMarkup(buttons)
-            await msg.edit_text(f"🎯 **'{query}'** için **{len(results)}** kaynak bulundu:\nİndirmek istediğiniz sunucuyu seçin:", reply_markup=keyboard)
+            text, keyboard = self.render_search_keyboard(results, page=0, query_title=query)
+            await msg.edit_text(text, reply_markup=keyboard)
 
         # 3. /indir <dizi> <sezon> <bölüm>
         @self.app.on_message(filters.command(["indir", "download"]))
@@ -774,19 +801,26 @@ class DiziBotManager:
                     reply_markup=InlineKeyboardMarkup(ep_buttons)
                 )
 
-            # 2.1 Arama Sonuçlarına Geri Dön
+            # 2.1 Arama Sonuçlarına Geri Dön ve Sayfalama
+            elif data.startswith("search_page:"):
+                page = int(data.split(":")[1])
+                user_cache = SEARCH_CACHE.get(str(user_id), [])
+                if not user_cache:
+                    await query.answer("⚠️ Arama sonucu süresi doldu, lütfen tekrar arayın.", show_alert=True)
+                    return
+                text, keyboard = self.render_search_keyboard(user_cache, page=page)
+                await query.edit_message_text(text, reply_markup=keyboard)
+
             elif data == "back_search":
                 user_cache = SEARCH_CACHE.get(str(user_id), [])
                 if not user_cache:
                     await query.answer("⚠️ Arama sonucu süresi doldu, lütfen tekrar arayın.", show_alert=True)
                     return
-                buttons = []
-                for i_idx, r in enumerate(user_cache[:25]):
-                    t_title = r.get("title", "İçerik")
-                    p_name = r.get("plugin_name", "Kaynak")
-                    buttons.append([InlineKeyboardButton(f"🎬 {t_title} [{p_name}]", callback_data=f"sel_res:{i_idx}")])
-                keyboard = InlineKeyboardMarkup(buttons)
-                await query.edit_message_text("🎯 **Arama Sonuçları:**\nİndirmek istediğiniz içeriği seçin:", reply_markup=keyboard)
+                text, keyboard = self.render_search_keyboard(user_cache, page=0)
+                await query.edit_message_text(text, reply_markup=keyboard)
+
+            elif data == "noop":
+                await query.answer()
 
             # 3. Bölüm İndirme Tetikleme
             elif data.startswith("dl_ep:"):

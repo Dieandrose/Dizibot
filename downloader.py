@@ -117,28 +117,33 @@ class Downloader:
         if q_clean == t_clean:
             return 100.0
 
-        # Başlık tam olarak sorgu ile başlıyor ve devamında sadece yıl veya boşluk varsa
+        # Başlık tam olarak sorgu ile başlıyorsa (örn: "Harry Potter ...", "Tuzlu Kahve ...")
         if t_clean.startswith(q_clean):
             rest = t_clean[len(q_clean):].strip()
             if not rest or rest.isdigit():
-                return 95.0
+                return 98.0
+            return 88.0
+
+        # Sorgu başlığın içinde geçiyorsa (örn: "The Matrix" -> "Matrix")
+        if q_clean in t_clean:
+            return 80.0
 
         q_words = q_clean.split()
         t_words = t_clean.split()
 
-        # Kısa sorgularda (1-2 kelime, örn: "FROM", "LOST", "YOU", "DARK")
-        # Başlıkta yabancı/alakasız kelimeler olamaz (örn: "Tales from the Crypt", "Stranger Things" elenir)
-        if len(q_words) <= 2:
-            if q_clean == t_clean:
-                return 100.0
-            return 0.0
+        # Tüm sorgu kelimeleri başlıkta mevcut mu? (Örn: "Rick Morty" -> "Rick and Morty")
+        if all(w in t_words or any(w in tw for tw in t_words) for w in q_words):
+            match_ratio = len(q_words) / max(len(t_words), 1)
+            return max(60.0, match_ratio * 90.0)
 
-        # Çok kelimeli sorgularda (>= 3 kelime)
-        if q_words == t_words:
-            return 100.0
+        # Kelimelerin çoğu eşleşiyor mu?
+        common_words = set(q_words) & set(t_words)
+        if len(common_words) > 0 and len(common_words) >= (len(q_words) + 1) // 2:
+            return 50.0 + (len(common_words) / len(q_words)) * 30.0
 
+        # Benzerlik oranı (Fuzzy match)
         seq_ratio = difflib.SequenceMatcher(None, q_clean, t_clean).ratio()
-        if seq_ratio >= 0.85:
+        if seq_ratio >= 0.55:
             return seq_ratio * 100.0
 
         return 0.0
@@ -175,12 +180,12 @@ class Downloader:
     async def search_all_plugins(cls, query: str) -> List[Dict[str, Any]]:
         """DarkBox eklentilerinde kontrollü, hızlı ve bellek korumalı paralel arama yapar."""
         plugins = cls.get_all_plugin_names()
-        sem = asyncio.Semaphore(25)
+        sem = asyncio.Semaphore(35)
         
         async def _search_plugin(p: str):
             async with sem:
                 try:
-                    res = await asyncio.wait_for(local_search(p, query), timeout=4.0)
+                    res = await asyncio.wait_for(local_search(p, query), timeout=6.0)
                     out = []
                     for item in res:
                         title = item.get("title") if isinstance(item, dict) else (item.title if hasattr(item, "title") else str(item))
@@ -201,7 +206,7 @@ class Downloader:
                     return []
 
         tasks = [asyncio.create_task(_search_plugin(p)) for p in plugins]
-        done, pending = await asyncio.wait(tasks, timeout=7.0)
+        done, pending = await asyncio.wait(tasks, timeout=8.5)
         for t in pending:
             t.cancel()
             
