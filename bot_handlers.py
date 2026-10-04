@@ -1269,12 +1269,12 @@ class DiziBotManager:
                     db.update_queue_progress(job_id, "downloading", 0.73 if phase == "muxing" else pct * 0.7)
 
                 # 1. Öncelik: Türkçe Ses / Dublaj Tespiti
-                is_dublaj = cand.get("is_dublaj", False) or any(k in (cand.get("name") or "").lower() or k in (cand.get("title") or "").lower() for k in ["dublaj", "dub", "tr dub", "türkçe dublaj", "türkçe", "tr"])
+                is_dublaj = Downloader.is_candidate_tr_dublaj(cand)
 
-                # 2. Öncelik (Fallback): TR Ses Yoksa OpenSubtitles'dan Türkçe Altyazı Getir ve Gömelim
+                # 2. Öncelik (Fallback): SADECE içerik kesinlikle Türkçe dublaj DEĞİLSE OpenSubtitles'dan altyazı ara
                 sub_file = None
                 if not is_dublaj:
-                    logger.info(f"İçerik orijinal dilde, OpenSubtitles üzerinden Türkçe altyazı aranıyor: {clean_title}")
+                    logger.info(f"İçerik orijinal dilde ({p_name}), OpenSubtitles üzerinden Türkçe altyazı aranıyor: {clean_title}")
                     try:
                         sub_file = await Downloader.fetch_and_prepare_opensubtitles(
                             clean_title, 

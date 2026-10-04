@@ -335,25 +335,52 @@ class Downloader:
                 candidates.extend(r)
 
         all_plugins = cls.get_all_plugin_names()
+
         # Dublaj skoru ve eklenti önceliğine göre sırala
         def dublaj_priority_key(c):
             p = c.get("plugin", "")
-            name = (c.get("name") or "").lower()
-            title = (c.get("title") or "").lower()
-            
-            # Stüdyo master ve yüksek hızlı tekil akışlı kaynaklar (DizipalX, SineWix, RecTV, Vizyona, Dizipal, DiziMom, Dizi65, FilmModu, FullHDFilmizlesene)
+            is_tr = cls.is_candidate_tr_dublaj(c)
             is_fast_master = p in ["DizipalX", "SineWix", "RecTV", "Vizyona", "Dizipal", "DiziMom", "Dizi65", "FilmModu", "FullHDFilmizlesene", "HDMovie8"]
-            score = 200 if is_fast_master else 40
-            if any(k in name or k in title for k in ["dublaj", "dub", "tr dub", "türkçe dublaj", "türkçe", "tr"]):
-                score += 50
-            elif any(k in name or k in title for k in ["altyazı", "sub", "eng", "orijinal", "english"]):
-                score = 10
+            
+            score = 0
+            if is_tr:
+                score += 1000
+            if is_fast_master:
+                score += 200
                 
             p_idx = all_plugins.index(p) if p in all_plugins else 999
             return (-score, p_idx)
 
         candidates.sort(key=dublaj_priority_key)
         return candidates
+
+    @classmethod
+    def is_candidate_tr_dublaj(cls, cand: Dict[str, Any]) -> bool:
+        """
+        Bir kaynağın Türkçe dublaj / Türkçe ses içerip içermediğini analiz eder.
+        """
+        if cand.get("is_dublaj") is True:
+            return True
+        
+        name = (cand.get("name") or "").lower()
+        title = (cand.get("title") or "").lower()
+        plugin = cand.get("plugin") or ""
+        
+        # Eğer açıkça Altyazılı belirtilmişse ve dublaj denmemişse
+        is_explicit_sub = ("altyazı" in name or "altyazı" in title or "sub" in name) and not ("dublaj" in name or "dublaj" in title or "tr dub" in name or "tr dub" in title)
+        if is_explicit_sub:
+            return False
+            
+        # Açıkça dublaj/TR ses belirtilmişse
+        if any(k in name or k in title for k in ["dublaj", "dub", "tr dub", "türkçe dublaj", "türkçe ses", "(tr)", "[tr]"]):
+            return True
+            
+        # Türk dizi/film sitelerinde varsayılan içerikler Türkçe dublajlıdır
+        tr_dub_plugins = ["DizipalX", "Dizipal", "Dizipal2", "SineWix", "RecTV", "Vizyona", "Dizibal", "Dizibol", "DiziMom", "Dizi65", "FullHDFilmizlesene", "FilmModu", "HDMovie8"]
+        if plugin in tr_dub_plugins:
+            return True
+            
+        return False
 
     @classmethod
     async def fetch_and_prepare_opensubtitles(
