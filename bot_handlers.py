@@ -105,9 +105,29 @@ class DiziBotManager:
             topic_name = f"🎬 {target_key}"
 
         existing_id = db.get_topic_id(target_key)
-        if existing_id:
-            return existing_id
+        if existing_id and existing_id > 0:
+            # Topic'in Telegram tarafında hala canlı ve geçerli olup olmadığını doğrula
+            api_edit_url = f"https://api.telegram.org/bot{config.bot_token}/editForumTopic"
+            async with httpx.AsyncClient(timeout=6.0) as client:
+                try:
+                    r = await client.post(api_edit_url, json={
+                        "chat_id": config.target_chat_id,
+                        "message_thread_id": existing_id,
+                        "name": topic_name[:128]
+                    })
+                    res_data = r.json()
+                    if res_data.get("ok") or res_data.get("description") == "Bad Request: TOPIC_NOT_MODIFIED":
+                        return existing_id
+                    else:
+                        logger.warning(f"Kayıtlı konu ID ({existing_id}) geçersiz ({res_data.get('description')}), yeni konu açılıyor...")
+                        with db._get_conn() as conn:
+                            conn.cursor().execute("DELETE FROM topics WHERE series_title = ?", (db._norm_title(target_key),))
+                            conn.commit()
+                except Exception as e:
+                    logger.debug(f"Konu doğrulama atlandı: {e}")
+                    return existing_id
 
+        # Konu yoksa veya Telegram'da silinmişse YENİ FORUM KONUSU AÇ
         api_url = f"https://api.telegram.org/bot{config.bot_token}/createForumTopic"
         async with httpx.AsyncClient(timeout=15.0) as client:
             try:
