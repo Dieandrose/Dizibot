@@ -1296,6 +1296,15 @@ class DiziBotManager:
                             )
 
                         # Telegram'a Yükle (Canlı İlerleme Takibi)
+                        LIVE_TRANSFERS[job_id] = {
+                            "title": f"{disp_title}{part_tag}",
+                            "phase": "uploading",
+                            "current": 0,
+                            "total": part_fsize,
+                            "speed_mb": 0.0,
+                            "progress": 0.0,
+                            "updated_at": time.time()
+                        }
                         db.update_queue_progress(job_id, "uploading", 0.75 + ((part_idx - 1) / total_parts) * 0.25)
                         logger.info(f"Telegram Konusuna Yükleniyor: '{disp_title}'{part_tag} (Topic: {topic_id})")
 

@@ -336,8 +336,9 @@ class Downloader:
             name = (c.get("name") or "").lower()
             title = (c.get("title") or "").lower()
             
-            # Stüdyo master ve tekil akışlı kaynaklar (Dizi65, SineWix, RecTV, DiziIzleClick, Dizibal, Dizibol) kusursuz senkrona sahiptir
-            score = 80 if p in ["Dizi65", "SineWix", "RecTV", "DiziIzleClick", "Dizibal", "Dizibol", "FullHDFilmizlesene", "FilmModu"] else 40
+            # Stüdyo master ve yüksek hızlı tekil akışlı kaynaklar (Dizi65, SineWix, RecTV, DiziIzleClick, Dizibal, Dizibol, FullHDFilmizlesene, FilmModu, DiziMom)
+            is_fast_master = p in ["Dizi65", "SineWix", "RecTV", "DiziIzleClick", "Dizibal", "Dizibol", "FullHDFilmizlesene", "FilmModu", "DiziMom", "HDMovie8"]
+            score = 200 if is_fast_master else 40
             if any(k in name or k in title for k in ["dublaj", "dub", "tr dub", "türkçe dublaj", "türkçe", "tr"]):
                 score += 50
             elif any(k in name or k in title for k in ["altyazı", "sub", "eng", "orijinal", "english"]):
@@ -523,6 +524,9 @@ class Downloader:
             tmp_video_file = output_path.with_suffix(".vraw.ts")
             tmp_audio_tr_file = output_path.with_suffix(".atr.ts") if audio_tr_segs else None
 
+            tot_all_chunks = len(video_segs) + len(audio_tr_segs)
+            done_all_chunks = 0
+
             async def download_seg_list(
                 seg_list: List[str], 
                 dest_file: Path, 
@@ -534,20 +538,20 @@ class Downloader:
                 if total == 0:
                     return
 
-                sem = asyncio.Semaphore(35)
-                done = 0
+                sem = asyncio.Semaphore(35 if is_video else 50)
+                nonlocal done_all_chunks
 
                 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
                 from cryptography.hazmat.backends import default_backend
 
                 async def fetch_seg(idx: int, s_url: str):
-                    nonlocal done
+                    nonlocal done_all_chunks
                     async with sem:
                         for retry in range(3):
                             try:
                                 res = await session.get(s_url, headers=headers, timeout=10.0)
                                 if res.status_code == 200 and len(res.content) > 0:
-                                    done += 1
+                                    done_all_chunks += 1
                                     chunk_data = res.content
                                     # AES-128 Şifre Çözme
                                     if key_bytes:
@@ -559,14 +563,14 @@ class Downloader:
                                         except Exception as dec_err:
                                             logger.debug(f"Segment #{idx} AES çözme hatası: {dec_err}")
                                             
-                                    if is_video and progress_cb and total > 0 and done % 10 == 0:
+                                    if progress_cb and tot_all_chunks > 0 and done_all_chunks % 15 == 0:
                                         try:
-                                            progress_cb(done / total, done, total)
+                                            progress_cb(done_all_chunks / tot_all_chunks, done_all_chunks, tot_all_chunks)
                                         except TypeError:
-                                            progress_cb(done / total)
+                                            progress_cb(done_all_chunks / tot_all_chunks)
                                     return idx, chunk_data
                             except Exception:
-                                await asyncio.sleep(0.2 + retry * 0.2)
+                                await asyncio.sleep(0.1 + retry * 0.2)
                         return idx, b""
 
                 completed_chunks = {}
@@ -600,7 +604,7 @@ class Downloader:
 
             if progress_cb:
                 try:
-                    progress_cb(1.0, len(video_segs), len(video_segs), phase="muxing")
+                    progress_cb(1.0, tot_all_chunks, tot_all_chunks, phase="muxing")
                 except TypeError:
                     try:
                         progress_cb(1.0)
