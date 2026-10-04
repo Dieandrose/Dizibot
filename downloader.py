@@ -776,7 +776,6 @@ class Downloader:
                 "-t", f"{t:.2f}",
                 "-c", "copy",
                 "-avoid_negative_ts", "make_zero",
-                "-movflags", "+faststart",
                 str(part_file)
             ]
             proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)

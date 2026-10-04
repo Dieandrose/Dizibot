@@ -1079,20 +1079,20 @@ class DiziBotManager:
                 )
                 live_shown += 1
                 buttons.append([InlineKeyboardButton(f"❌ #{job_id} İptal Et", callback_data=f"cancel_job:{job_id}")])
-            elif t_info and t_info.get("phase") == "compressing":
+            elif t_info and t_info.get("phase") in ["muxing", "preparing"]:
                 text += (
                     f"🎬 **{disp_title}**\n"
-                    f"• Aşama: 📦 `BOYUT OPTİMİZASYONU` (<2GB)\n"
-                    f"• Durum: `⚡ Video Telegram'ın 2GB limitini aştığı için sıkıştırılıyor...`\n"
+                    f"• Aşama: ⚡ `HAZIRLANIYOR` (Kayıpsız Paketleme)\n"
+                    f"• Durum: `🚀 İndirme tamamlandı, anında yüklemeye hazırlanıyor...`\n"
                     f"• İşlem ID: `#{job_id}`\n\n"
                 )
                 live_shown += 1
                 buttons.append([InlineKeyboardButton(f"❌ #{job_id} İptal Et", callback_data=f"cancel_job:{job_id}")])
-            elif t_info and t_info.get("phase") == "muxing":
+            elif t_info and t_info.get("phase") == "splitting":
                 text += (
                     f"🎬 **{disp_title}**\n"
-                    f"• Aşama: ⚙️ `SES & VİDEO SENKRONİZASYONU` (FFmpeg)\n"
-                    f"• Durum: `🔄 İndirme tamamlandı, ses ve video kayıpsız birleştiriliyor...`\n"
+                    f"• Aşama: ✂️ `PARÇALARA AYRILIYOR` (>2GB)\n"
+                    f"• Durum: `⚡ Video Telegram'a sığması için 0 kayıpla bölünmektedir...`\n"
                     f"• İşlem ID: `#{job_id}`\n\n"
                 )
                 live_shown += 1
