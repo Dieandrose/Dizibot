@@ -341,8 +341,8 @@ class Downloader:
             name = (c.get("name") or "").lower()
             title = (c.get("title") or "").lower()
             
-            # Stüdyo master ve yüksek hızlı tekil akışlı kaynaklar (Dizi65, SineWix, RecTV, DiziIzleClick, Dizibal, Dizibol, FullHDFilmizlesene, FilmModu, DiziMom)
-            is_fast_master = p in ["Dizi65", "SineWix", "RecTV", "DiziIzleClick", "Dizibal", "Dizibol", "FullHDFilmizlesene", "FilmModu", "DiziMom", "HDMovie8"]
+            # Stüdyo master ve yüksek hızlı tekil akışlı kaynaklar (DizipalX, SineWix, RecTV, Vizyona, Dizipal, DiziMom, Dizi65, FilmModu, FullHDFilmizlesene)
+            is_fast_master = p in ["DizipalX", "SineWix", "RecTV", "Vizyona", "Dizipal", "DiziMom", "Dizi65", "FilmModu", "FullHDFilmizlesene", "HDMovie8"]
             score = 200 if is_fast_master else 40
             if any(k in name or k in title for k in ["dublaj", "dub", "tr dub", "türkçe dublaj", "türkçe", "tr"]):
                 score += 50
@@ -552,6 +552,7 @@ class Downloader:
 
                 sem = asyncio.Semaphore(25 if is_video else 50)
                 nonlocal done_all_chunks
+                last_working_netloc = None
 
                 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
                 from cryptography.hazmat.backends import default_backend
@@ -563,14 +564,42 @@ class Downloader:
                         return False
                     return True
 
+                # Sessiz TS Padding (Ses parçasının tamamen eksik kalması durumunda senkron kaymasını engeller)
+                def get_silent_ts_pad() -> bytes:
+                    try:
+                        pad_file = Path("/tmp/dizibot_silent_audio_pad.ts")
+                        if not pad_file.exists() or pad_file.stat().st_size == 0:
+                            import subprocess
+                            cmd = [
+                                "ffmpeg", "-y", "-v", "error",
+                                "-f", "lavfi",
+                                "-i", "anullsrc=r=48000:cl=stereo",
+                                "-t", "2.944",
+                                "-c:a", "aac",
+                                "-b:a", "128k",
+                                "-f", "mpegts",
+                                str(pad_file)
+                            ]
+                            subprocess.run(cmd, check=True)
+                        return pad_file.read_bytes()
+                    except Exception:
+                        return b""
+
                 async def fetch_seg(idx: int, s_url: str):
-                    nonlocal done_all_chunks
+                    nonlocal done_all_chunks, last_working_netloc
+                    orig_parsed = urllib.parse.urlparse(s_url)
                     async with sem:
                         for retry in range(12):
+                            url_to_try = s_url
+                            # Eğer 2. veya sonraki denemedeyse ve çalışan bir CDN mirror varsa, alan adını mirror ile dene
+                            if retry >= 2 and last_working_netloc and orig_parsed.netloc != last_working_netloc:
+                                url_to_try = urllib.parse.urlunparse(orig_parsed._replace(netloc=last_working_netloc))
+
                             try:
-                                res = await session.get(s_url, headers=headers, timeout=15.0)
+                                res = await session.get(url_to_try, headers=headers, timeout=15.0)
                                 if res.status_code == 200 and is_valid_chunk(res.content):
                                     done_all_chunks += 1
+                                    last_working_netloc = orig_parsed.netloc if res.url == s_url else last_working_netloc
                                     chunk_data = res.content
                                     # AES-128 Şifre Çözme
                                     if key_bytes:
@@ -589,9 +618,17 @@ class Downloader:
                                             progress_cb(done_all_chunks / tot_all_chunks)
                                     return idx, chunk_data
                                 else:
-                                    await asyncio.sleep(0.4 + retry * 0.4)
+                                    await asyncio.sleep(0.3 + retry * 0.3)
                             except Exception:
-                                await asyncio.sleep(0.4 + retry * 0.4)
+                                await asyncio.sleep(0.3 + retry * 0.3)
+
+                        # Eğer ses parçasıysa ve inemediyse, ses zaman çizgisinin kaymaması için sessiz parça ile doldur
+                        if not is_video:
+                            silent_bytes = get_silent_ts_pad()
+                            if silent_bytes:
+                                done_all_chunks += 1
+                                return idx, silent_bytes
+
                         return idx, b""
 
                 completed_chunks = {}
