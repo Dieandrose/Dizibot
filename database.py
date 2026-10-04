@@ -146,6 +146,48 @@ class Database:
             )
             conn.commit()
 
+    def get_series_forum_info(self, query: str) -> Optional[Dict[str, Any]]:
+        """
+        Aranan içeriğin forumda mevcut olup olmadığını, konu linkini ve yüklenen bölüm sayısını döndürür.
+        """
+        norm = self._norm_title(query)
+        if not norm:
+            return None
+            
+        topic_id = self.get_topic_id(query)
+        if not topic_id:
+            return None
+            
+        with self._get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT COUNT(*) as cnt, MAX(tg_message_id) as last_msg_id
+                FROM uploads 
+                WHERE status = 'uploaded' AND (
+                    LOWER(title) LIKE ? OR 
+                    LOWER(title) LIKE ?
+                )
+            """, (f"%{norm}%", f"{norm}%"))
+            row = cur.fetchone()
+            uploaded_count = row["cnt"] if row else 0
+            
+            from config import config
+            chat_id_str = str(config.target_chat_id)
+            if chat_id_str.startswith("-100"):
+                clean_chat_id = chat_id_str[4:]
+            elif chat_id_str.startswith("-"):
+                clean_chat_id = chat_id_str[1:]
+            else:
+                clean_chat_id = chat_id_str
+                
+            topic_url = f"https://t.me/c/{clean_chat_id}/{topic_id}"
+            
+            return {
+                "topic_id": topic_id,
+                "topic_url": topic_url,
+                "uploaded_count": uploaded_count
+            }
+
     # --- Yükleme Durumu ---
     def is_uploaded(self, plugin: str, item_url: str, season: int = 0, episode: int = 0) -> bool:
         with self._get_conn() as conn:

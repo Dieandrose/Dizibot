@@ -75,6 +75,18 @@ class DiziBotManager:
         page_items = results[start_idx:end_idx]
 
         buttons = []
+        forum_info = db.get_series_forum_info(query_title) if query_title else None
+        
+        # Eğer içerik zaten forumda mevcutsa en tepeye büyük doğrudan izleme butonu ekle
+        if forum_info:
+            count_txt = f" ({forum_info['uploaded_count']} Bölüm)" if forum_info['uploaded_count'] > 0 else ""
+            buttons.append([
+                InlineKeyboardButton(
+                    f"📍 🎬 Forumda Mevcut{count_txt} ➔ Konuya Git",
+                    url=forum_info["topic_url"]
+                )
+            ])
+
         for idx_offset, r in enumerate(page_items):
             global_idx = start_idx + idx_offset
             title = r.get("title", "İçerik")
@@ -93,7 +105,12 @@ class DiziBotManager:
             buttons.append(nav_row)
 
         header = f"🎯 **'{query_title}'** için **{total}** kaynak bulundu" if query_title else f"🎯 Toplam **{total}** kaynak bulundu"
-        text = f"{header} (Sayfa {page+1}/{total_pages}):\nİndirmek istediğiniz sunucu ve içeriği seçin:"
+        forum_banner = ""
+        if forum_info:
+            cnt_str = f" (**{forum_info['uploaded_count']}** bölüm yüklü)" if forum_info['uploaded_count'] > 0 else ""
+            forum_banner = f"✨ **Bu içerik zaten forumumuzda mevcut!**{cnt_str}\n👉 Doğrudan izlemek için yukarıdaki **`📍 Forumda Mevcut`** butonuna tıklayabilirsiniz.\n\n"
+
+        text = f"{header} (Sayfa {page+1}/{total_pages}):\n{forum_banner}İndirmek veya yeni kaynak seçmek için:"
         return text, InlineKeyboardMarkup(buttons)
 
     async def get_or_create_series_topic(self, series_title: str, is_movie: bool = False) -> int:
