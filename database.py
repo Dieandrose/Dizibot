@@ -96,10 +96,15 @@ class Database:
                     priority INTEGER DEFAULT 1,
                     progress REAL DEFAULT 0.0,
                     error_msg TEXT,
+                    requested_by INTEGER DEFAULT 0,
                     created_at REAL,
                     updated_at REAL
                 )
             """)
+            try:
+                cur.execute("ALTER TABLE download_queue ADD COLUMN requested_by INTEGER DEFAULT 0")
+            except Exception:
+                pass
             conn.commit()
 
     @staticmethod
@@ -313,15 +318,15 @@ class Database:
             return [dict(r) for r in cur.fetchall()]
 
     # --- Kuyruk Yönetimi ---
-    def add_to_queue(self, title: str, season: int, episode: int, plugin_name: str = "", item_url: str = "", priority: int = 1) -> int:
+    def add_to_queue(self, title: str, season: int, episode: int, plugin_name: str = "", item_url: str = "", priority: int = 1, requested_by: int = 0) -> int:
         with self._get_conn() as conn:
             cur = conn.cursor()
             cur.execute(
                 """
-                INSERT INTO download_queue (title, season, episode, plugin_name, item_url, status, priority, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?)
+                INSERT INTO download_queue (title, season, episode, plugin_name, item_url, status, priority, requested_by, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)
                 """,
-                (title, season, episode, plugin_name, item_url, priority, time.time(), time.time())
+                (title, season, episode, plugin_name, item_url, priority, requested_by, time.time(), time.time())
             )
             conn.commit()
             return cur.lastrowid or 0

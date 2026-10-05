@@ -309,8 +309,9 @@ class DiziBotManager:
             s_num = int(parts[-2])
             e_num = int(parts[-1])
             title = " ".join(parts[1:-2])
+            u_id = message.from_user.id if message.from_user else 0
 
-            job_id = db.add_to_queue(title=title, season=s_num, episode=e_num, priority=3)
+            job_id = db.add_to_queue(title=title, season=s_num, episode=e_num, priority=3, requested_by=u_id)
             await message.reply_text(f"✅ **{title} S{s_num:02d}E{e_num:02d}** indirme kuyruğuna eklendi! (İşlem ID: `{job_id}`)")
             asyncio.create_task(self.process_queue())
 
@@ -552,13 +553,13 @@ class DiziBotManager:
                             s_num = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
                             e_num = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
                             if s_num == target_s:
-                                db.add_to_queue(title=clean_title, season=s_num, episode=e_num, priority=3)
+                                db.add_to_queue(title=clean_title, season=s_num, episode=e_num, priority=3, requested_by=u_id)
                                 queued_count += 1
 
                     if queued_count > 0:
                         await status_msg.edit_text(f"🚀 **Dark İsteği Başlatıldı:** {clean_title} {target_s}. Sezon ({queued_count} bölüm) onaysız olarak doğrudan kuyruğa alındı ve indirme başladı!")
                     else:
-                        job_id = db.add_to_queue(title=clean_title, season=target_s, episode=1, priority=3)
+                        job_id = db.add_to_queue(title=clean_title, season=target_s, episode=1, priority=3, requested_by=u_id)
                         await status_msg.edit_text(f"🚀 **Dark İsteği Başlatıldı:** '{clean_title} S{target_s:02d}E01' kuyruğa alındı! (İşlem ID: `{job_id}`)")
                 else:
                     # İçeriğin Dizi mi Film mi olduğunu kontrol et
@@ -590,16 +591,16 @@ class DiziBotManager:
                             for ep in episodes:
                                 s_num = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
                                 e_num = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
-                                db.add_to_queue(title=clean_title, season=s_num, episode=e_num, plugin_name=p_name, item_url=i_url, priority=2)
+                                db.add_to_queue(title=clean_title, season=s_num, episode=e_num, plugin_name=p_name, item_url=i_url, priority=2, requested_by=u_id)
                                 added += 1
                                 seasons_set.add(s_num)
 
                             await message.reply_text(f"🚀 **Dark İsteği Başlatıldı:** '{clean_title}' dizisinin **TÜM SEZONLARI** ({len(seasons_set)} sezon, toplam {added} bölüm) onaysız olarak doğrudan kuyruğa alındı ve sırayla indirilip yükleniyor!")
                         else:
-                            job_id = db.add_to_queue(title=clean_title, season=0, episode=0, priority=3)
+                            job_id = db.add_to_queue(title=clean_title, season=0, episode=0, priority=3, requested_by=u_id)
                             await message.reply_text(f"🚀 **Dark İsteği Başlatıldı:** '{clean_title}' (Film) onaysız olarak doğrudan kuyruğa alındı ve '🎬 Filmler' konusuna yükleniyor! (İşlem ID: `{job_id}`)")
                     else:
-                        job_id = db.add_to_queue(title=clean_title, season=s, episode=e, priority=3)
+                        job_id = db.add_to_queue(title=clean_title, season=s, episode=e, priority=3, requested_by=u_id)
                         await message.reply_text(f"🚀 **Dark İsteği Başlatıldı:** '{clean_title} S{s:02d}E{e:02d}' onaysız olarak doğrudan kuyruğa alındı ve indirme başladı! (İşlem ID: `{job_id}`)")
 
                 asyncio.create_task(self.process_queue())
@@ -806,7 +807,7 @@ class DiziBotManager:
                 for ep in episodes:
                     s = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
                     e = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
-                    db.add_to_queue(title=title, season=s, episode=e, plugin_name=plugin, item_url=url, priority=2)
+                    db.add_to_queue(title=title, season=s, episode=e, plugin_name=plugin, item_url=url, priority=2, requested_by=user_id)
                     added += 1
                     seasons_set.add(s)
 
@@ -834,7 +835,7 @@ class DiziBotManager:
                     await _notify_admins_for_request(req_id, f"{title} (Film)", user_id, user_name, plugin)
                     return
 
-                job_id = db.add_to_queue(title=title, season=0, episode=0, plugin_name=plugin, item_url=url, priority=3)
+                job_id = db.add_to_queue(title=title, season=0, episode=0, plugin_name=plugin, item_url=url, priority=3, requested_by=user_id)
                 await query.answer("✅ Film kuyruğa eklendi!")
                 await query.edit_message_text(f"✅ **{title}** (Film) indirme kuyruğuna alındı! (İşlem ID: `{job_id}`)\n'🎬 Filmler' konusuna yüklenecektir.")
                 asyncio.create_task(self.process_queue())
@@ -921,7 +922,7 @@ class DiziBotManager:
                     await _notify_admins_for_request(req_id, f"{title} S{s_num:02d}E{e_num:02d}", user_id, user_name, plugin)
                     return
 
-                job_id = db.add_to_queue(title=title, season=s_num, episode=e_num, plugin_name=plugin, item_url=url, priority=3)
+                job_id = db.add_to_queue(title=title, season=s_num, episode=e_num, plugin_name=plugin, item_url=url, priority=3, requested_by=user_id)
                 await query.answer("✅ Kuyruğa eklendi!")
                 await query.edit_message_text(f"✅ **{title} S{s_num:02d}E{e_num:02d}** indirme kuyruğuna alındı! (İşlem ID: `{job_id}`)")
                 asyncio.create_task(self.process_queue())
@@ -959,7 +960,7 @@ class DiziBotManager:
                     s = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
                     e = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
                     if s == s_num:
-                        db.add_to_queue(title=title, season=s, episode=e, plugin_name=plugin, item_url=url, priority=2)
+                        db.add_to_queue(title=title, season=s, episode=e, plugin_name=plugin, item_url=url, priority=2, requested_by=user_id)
                         added += 1
 
                 await query.answer(f"✅ {added} bölüm kuyruğa eklendi!")
@@ -978,6 +979,7 @@ class DiziBotManager:
                     return
 
                 clean_title, s, e = Downloader.parse_title_season_episode(req["query"])
+                req_uid = req.get("user_id", 0) or 0
                 db.update_request_status(req_id, "approved", admin_id=user_id)
 
                 # Sezon tespiti kontrolü
@@ -996,16 +998,17 @@ class DiziBotManager:
                             ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1),
                             ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
                         ))
+                        req_uid = req.get("user_id", 0) or 0
                         for ep in episodes:
                             s_num = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
                             e_num = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
                             if s_num == target_s:
-                                db.add_to_queue(title=clean_title, season=s_num, episode=e_num, priority=3)
+                                db.add_to_queue(title=clean_title, season=s_num, episode=e_num, priority=3, requested_by=req_uid)
                                 queued_count += 1
                     if queued_count > 0:
                         await query.edit_message_text(f"✅ **İstek `#{req_id}` Onaylandı!** '{clean_title} {target_s}. Sezon' ({queued_count} bölüm) kuyruğa alındı.")
                     else:
-                        job_id = db.add_to_queue(title=clean_title, season=target_s, episode=1, priority=3)
+                        job_id = db.add_to_queue(title=clean_title, season=target_s, episode=1, priority=3, requested_by=req_uid)
                         await query.edit_message_text(f"✅ **İstek `#{req_id}` Onaylandı!** (İşlem ID: `{job_id}`)")
                 elif not has_explicit_ep and not season_match:
                     results = await Downloader.search_all_plugins(clean_title)
@@ -1030,18 +1033,21 @@ class DiziBotManager:
                         seasons_set = set()
                         p_name = item.get("plugin_name", "") if item else ""
                         i_url = item.get("url", "") if item else ""
+                        req_uid = req.get("user_id", 0) or 0
                         for ep in episodes:
                             s_num = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
                             e_num = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
-                            db.add_to_queue(title=clean_title, season=s_num, episode=e_num, plugin_name=p_name, item_url=i_url, priority=2)
+                            db.add_to_queue(title=clean_title, season=s_num, episode=e_num, plugin_name=p_name, item_url=i_url, priority=2, requested_by=req_uid)
                             added += 1
                             seasons_set.add(s_num)
                         await query.edit_message_text(f"✅ **İstek `#{req_id}` Onaylandı!** '{clean_title}' dizisinin tüm sezonları ({len(seasons_set)} sezon, {added} bölüm) kuyruğa alındı.")
                     else:
-                        job_id = db.add_to_queue(title=clean_title, season=0, episode=0, priority=3)
+                        req_uid = req.get("user_id", 0) or 0
+                        job_id = db.add_to_queue(title=clean_title, season=0, episode=0, priority=3, requested_by=req_uid)
                         await query.edit_message_text(f"✅ **İstek `#{req_id}` Onaylandı!** '{clean_title}' (Film) kuyruğa alındı. (İşlem ID: `{job_id}`)")
                 else:
-                    job_id = db.add_to_queue(title=clean_title, season=s, episode=e, priority=3)
+                    req_uid = req.get("user_id", 0) or 0
+                    job_id = db.add_to_queue(title=clean_title, season=s, episode=e, priority=3, requested_by=req_uid)
                     await query.edit_message_text(f"✅ **İstek `#{req_id}` Onaylandı & Kuyruğa Alındı!** (İşlem ID: `{job_id}`)")
                 if req["user_id"]:
                     try:
@@ -1508,6 +1514,31 @@ class DiziBotManager:
                         db.update_queue_progress(job_id, "completed", 1.0)
                         uploaded_ok = True
                         logger.info(f"✅ Başarıyla Yüklendi! Son Mesaj ID: {last_msg_id}")
+
+                        # Talep Eden Kullanıcıya Özel Tamamlandı Bildirimi Gönder
+                        req_by = job.get("requested_by", 0)
+                        if req_by and req_by > 0:
+                            try:
+                                chat_id_str = str(config.target_chat_id)
+                                clean_cid = chat_id_str[4:] if chat_id_str.startswith("-100") else (chat_id_str[1:] if chat_id_str.startswith("-") else chat_id_str)
+                                vid_url = f"https://t.me/c/{clean_cid}/{topic_id}/{last_msg_id}" if topic_id > 0 else f"https://t.me/c/{clean_cid}/{last_msg_id}"
+                                notify_text = (
+                                    f"🎉 **Müjde! Talep Ettiğiniz İçerik Yüklendi!**\n\n"
+                                    f"🎬 **{disp_title}** başarıyla Telegram grubumuza yüklendi.\n"
+                                    f"🍿 İyi seyirler dileriz!"
+                                )
+                                notify_markup = InlineKeyboardMarkup([
+                                    [InlineKeyboardButton("🍿 Hemen İzle (Videoya Git)", url=vid_url)]
+                                ])
+                                await self.app.send_message(
+                                    chat_id=req_by,
+                                    text=notify_text,
+                                    reply_markup=notify_markup,
+                                    disable_web_page_preview=True
+                                )
+                                logger.info(f"Kullanıcıya ({req_by}) yükleme tamamlandı bildirimi gönderildi: {disp_title}")
+                            except Exception as notif_err:
+                                logger.debug(f"Kullanıcı tamamlama bildirim hatası: {notif_err}")
                         
                         # İşlem Sonrası Otomatik Eksik Bölüm Kontrolü (Sadece Diziler için)
                         if not is_movie:
