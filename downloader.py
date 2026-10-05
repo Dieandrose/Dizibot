@@ -376,31 +376,46 @@ class Downloader:
         return candidates
 
     @classmethod
-    def is_candidate_tr_dublaj(cls, cand: Dict[str, Any]) -> bool:
+    def is_candidate_tr_dublaj(cls, cand: Dict[str, Any], is_native_turkish: bool = False) -> bool:
         """
-        Bir kaynağın Türkçe dublaj / Türkçe ses içerip içermediğini analiz eder.
+        Bir kaynağın kesin olarak Türkçe dublaj / Türkçe ses içerip içermediğini analiz eder.
+        Sadece sitenin adına bakarak asla körü körüne Türkçe dublaj varsaymaz.
         """
         if cand.get("is_dublaj") is True:
             return True
         
         name = (cand.get("name") or "").lower()
         title = (cand.get("title") or "").lower()
-        plugin = cand.get("plugin") or ""
-        
-        # Eğer açıkça Altyazılı belirtilmişse ve dublaj denmemişse
-        is_explicit_sub = ("altyazı" in name or "altyazı" in title or "sub" in name) and not ("dublaj" in name or "dublaj" in title or "tr dub" in name or "tr dub" in title)
-        if is_explicit_sub:
+        ep_url = (cand.get("ep_url") or "").lower()
+        url = (cand.get("url") or "").lower()
+        full_meta = f"{name} {title} {ep_url} {url}"
+
+        # 1. Açıkça Dublaj Belirtilmişse -> KESİNLİKLE DUBLAJ
+        has_dub = any(k in full_meta for k in [
+            "dublaj", "tr dub", "türkçe dublaj", "turkce dublaj", 
+            "tr-dub", "turkce-dub", "(tr)", "[tr]", "türkçe ses", "turkce ses", "dual"
+        ])
+
+        # 2. Açıkça Altyazılı / Orijinal Belirtilmişse (ve dublaj denmemişse) -> DUBLAJ DEĞİL
+        has_sub = any(k in full_meta for k in [
+            "altyazı", "altyazi", "sub", "tr-sub", "tr-altyazi", "turkce-altyazi", 
+            "orijinal", "original", "english", "ingilizce"
+        ])
+
+        if has_dub:
+            return True
+        if has_sub:
             return False
-            
-        # Açıkça dublaj/TR ses belirtilmişse
-        if any(k in name or k in title for k in ["dublaj", "dub", "tr dub", "türkçe dublaj", "türkçe ses", "(tr)", "[tr]"]):
+
+        # 3. Ekli altyazı dosyası varsa ve dublaj denmemişse -> Altyazılıdır
+        subs = cand.get("subtitles")
+        if subs and len(subs) > 0:
+            return False
+
+        # 4. Yerli Türk Yapımı İçerikler
+        if is_native_turkish:
             return True
-            
-        # Türk dizi/film sitelerinde varsayılan içerikler Türkçe dublajlıdır
-        tr_dub_plugins = ["DizipalX", "Dizipal", "Dizipal2", "SineWix", "RecTV", "Vizyona", "Dizibal", "Dizibol", "DiziMom", "Dizi65", "FullHDFilmizlesene", "FilmModu", "HDMovie8"]
-        if plugin in tr_dub_plugins:
-            return True
-            
+
         return False
 
     @classmethod

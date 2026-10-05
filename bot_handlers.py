@@ -1469,10 +1469,10 @@ class DiziBotManager:
                     sub_badge = ""
                 elif sub_file:
                     audio_badge = "🌐 Orijinal Ses"
-                    sub_badge = "🇹🇷 Türkçe (OpenSubtitles)"
+                    sub_badge = "🇹🇷 Türkçe Altyazılı"
                 else:
                     audio_badge = "🌐 Orijinal Ses"
-                    sub_badge = ""
+                    sub_badge = "🇹🇷 Türkçe Altyazılı"
 
                 if db.is_job_cancelled(job_id):
                     break
