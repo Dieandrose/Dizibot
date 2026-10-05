@@ -1455,19 +1455,23 @@ class DiziBotManager:
                 # 1. Öncelik: Türkçe Ses / Dublaj Tespiti
                 is_dublaj = Downloader.is_candidate_tr_dublaj(cand, is_native_turkish=is_native_tr)
 
-                # 2. Öncelik (Fallback): SADECE içerik kesinlikle Türkçe dublaj DEĞİLSE OpenSubtitles'dan altyazı ara
+                # 2. Öncelik: SADECE içerik kesinlikle Türkçe dublaj veya yerli DEĞİLSE Altyazı hazırla (Hardsub)
                 sub_file = None
                 if not is_dublaj and not is_native_tr:
-                    logger.info(f"İçerik yabancı/orijinal dilde ({p_name}), OpenSubtitles üzerinden Türkçe altyazı aranıyor: {clean_title}")
-                    try:
-                        sub_file = await Downloader.fetch_and_prepare_opensubtitles(
-                            clean_title, 
-                            season=season, 
-                            episode=episode, 
-                            is_movie=is_movie
-                        )
-                    except Exception as sub_err:
-                        logger.warning(f"OpenSubtitles arama hatası: {sub_err}")
+                    # 2.1. Önce doğrudan kaynaktan (eklenti yanıtından) Türkçe altyazıyı çek
+                    sub_file = await Downloader.extract_and_prepare_source_subtitle(cand)
+                    # 2.2. Kaynakta altyazı yoksa OpenSubtitles üzerinden otomatik çek
+                    if not sub_file:
+                        logger.info(f"Kaynakta altyazı bulunamadı ({p_name}), OpenSubtitles üzerinden aranıyor: {clean_title}")
+                        try:
+                            sub_file = await Downloader.fetch_and_prepare_opensubtitles(
+                                clean_title, 
+                                season=season, 
+                                episode=episode, 
+                                is_movie=is_movie
+                            )
+                        except Exception as sub_err:
+                            logger.warning(f"OpenSubtitles arama hatası: {sub_err}")
 
                 dl_res = await Downloader.download_hls_stream(
                     stream_url, 

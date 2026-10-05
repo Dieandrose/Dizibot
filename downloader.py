@@ -470,6 +470,82 @@ class Downloader:
         return None
 
     @classmethod
+    async def extract_and_prepare_source_subtitle(
+        cls, 
+        cand: Dict[str, Any], 
+        output_srt: Optional[Path] = None
+    ) -> Optional[Path]:
+        """
+        Kaynaktan (eklenti yanıtı veya link metadata) Türkçe altyazıyı indirir, 
+        VTT ise SRT'ye çevirir, UTF-8 Türkçe karakter onarımını yapar.
+        """
+        import httpx
+        subs = cand.get("subtitles") or []
+        target_sub_url = None
+        
+        for s in subs:
+            if isinstance(s, dict):
+                lang = (s.get("language") or s.get("lang") or s.get("name") or "").lower()
+                u = s.get("url") or s.get("file")
+                if u and any(k in lang for k in ["tr", "tur", "turkish", "türkçe", "altyazı", "altyazi"]):
+                    target_sub_url = u
+                    break
+            elif isinstance(s, str) and (s.endswith(".vtt") or s.endswith(".srt") or "sub" in s.lower()):
+                target_sub_url = s
+                break
+
+        if not target_sub_url and subs and isinstance(subs[0], dict) and subs[0].get("url"):
+            target_sub_url = subs[0].get("url")
+
+        if not target_sub_url:
+            return None
+
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            if cand.get("referer"):
+                headers["Referer"] = cand["referer"]
+
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True, headers=headers) as client:
+                r = await client.get(target_sub_url)
+                if r.status_code != 200 or len(r.content) < 50:
+                    return None
+                raw_bytes = r.content
+
+            text = None
+            for enc in ["utf-8", "windows-1254", "iso-8859-9", "latin5", "cp1252"]:
+                try:
+                    text = raw_bytes.decode(enc)
+                    win1254_fixes = {
+                        "ý": "ı", "þ": "ş", "ð": "ğ",
+                        "Ý": "İ", "Þ": "Ş", "Ð": "Ğ"
+                    }
+                    for old_char, new_char in win1254_fixes.items():
+                        if old_char in text:
+                            text = text.replace(old_char, new_char)
+                    break
+                except UnicodeDecodeError:
+                    continue
+
+            if not text:
+                text = raw_bytes.decode("utf-8", errors="ignore")
+
+            # VTT -> SRT format normalizasyonu
+            if "WEBVTT" in text[:50]:
+                text = re.sub(r"^WEBVTT.*?\n\n", "", text, flags=re.DOTALL)
+                text = re.sub(r'(\d{2}:\d{2}:\d{2})\.(\d{3})', r'\1,\2', text)
+                text = re.sub(r'(\d{2}:\d{2})\.(\d{3})', r'00:\1,\2', text)
+
+            if output_srt is None:
+                output_srt = TEMP_DIR / f"src_sub_{int(time.time())}_{random.randint(100,999)}.srt"
+
+            output_srt.write_text(text, encoding="utf-8")
+            logger.info(f"Kaynaktan Türkçe altyazı başarıyla hazırlandı: {output_srt.name} ({output_srt.stat().st_size} bytes)")
+            return output_srt
+        except Exception as e:
+            logger.debug(f"Kaynak altyazı indirme hatası: {e}")
+            return None
+
+    @classmethod
     async def fetch_and_prepare_opensubtitles(
         cls, 
         title: str, 
@@ -900,23 +976,16 @@ class Downloader:
                     except Exception:
                         pass
 
-            # Altyazı Girişi (Eğer sağlandıysa MP4 içine mov_text olarak gömülür)
-            sub_inputs = []
-            sub_maps = []
-            sub_meta = []
+            # Altyazı Gömme Modu (Hardsub: Aç-Kapa Olmaksızın Doğrudan Piksele Gömülü Altyazı)
+            has_hardsub = False
+            video_encoding_args = ["-c:v", "copy"]
             if subtitle_path and subtitle_path.exists() and subtitle_path.stat().st_size > 0:
-                sub_inputs = ["-i", str(subtitle_path)]
-                sub_idx = 2 if (tmp_audio_tr_file and tmp_audio_tr_file.exists() and tmp_audio_tr_file.stat().st_size > 0) else 1
-                sub_maps = ["-map", f"{sub_idx}:s:0"]
-                sub_meta = [
-                    "-c:s", "mov_text",
-                    "-metadata:s:s:0", "language=tur",
-                    "-metadata:s:s:0", "title=Türkçe",
-                    "-metadata:s:s:0", "handler_name=Türkçe",
-                    "-disposition:s:0", "default"
-                ]
+                srt_escaped = str(subtitle_path).replace("\\", "/").replace(":", "\\:")
+                vf_str = f"subtitles='{srt_escaped}':force_style='FontName=DejaVu Sans,FontSize=21,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1.8,Shadow=0.6,MarginV=25'"
+                video_encoding_args = ["-vf", vf_str, "-c:v", "libx264", "-preset", "veryfast", "-crf", "22"]
+                has_hardsub = True
 
-            # Anında Ultra Hızlı Birleştirme (Kayıpsız 0-CPU Passthrough / Direct Stream Copy)
+            # Anında Ultra Hızlı Birleştirme
             audio_meta = []
             if has_turkish_audio_track:
                 audio_meta = [
@@ -931,15 +1000,12 @@ class Downloader:
                     "-threads", "0",
                     "-i", str(tmp_video_file),
                     "-i", str(tmp_audio_tr_file),
-                    *sub_inputs,
                     "-map", "0:v:0",
                     "-map", "1:a:0",
-                    *sub_maps,
-                    "-c:v", "copy",
+                    *video_encoding_args,
                     "-c:a", "copy",
                     "-bsf:a", "aac_adtstoasc",
                     *audio_meta,
-                    *sub_meta,
                     "-movflags", "+faststart",
                     str(output_path)
                 ]
@@ -948,15 +1014,12 @@ class Downloader:
                     "ffmpeg", "-y",
                     "-threads", "0",
                     "-i", str(tmp_video_file),
-                    *sub_inputs,
                     "-map", "0:v:0",
                     "-map", "0:a:0?",
-                    *sub_maps,
-                    "-c:v", "copy",
+                    *video_encoding_args,
                     "-c:a", "copy",
                     "-bsf:a", "aac_adtstoasc",
                     *audio_meta,
-                    *sub_meta,
                     "-movflags", "+faststart",
                     str(output_path)
                 ]
