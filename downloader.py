@@ -93,6 +93,7 @@ class Downloader:
             # Parantez/Köşeli parantez içlerini temizle: (2024), [DizipalX], (Türkçe Dublaj) vb.
             s = re.sub(r'[\(\[\{].*?[\)\]\}]', ' ', s)
             s = s.translate(tr_map)
+            s = re.sub(r'^(the|a|an|el|la|le|der|die|das)\s+', '', s)
             
             # Gürültü kelimeleri ve ekleri temizle
             noise = [
@@ -117,33 +118,37 @@ class Downloader:
         if q_clean == t_clean:
             return 100.0
 
-        # Başlık tam olarak sorgu ile başlıyorsa (örn: "Harry Potter ...", "Tuzlu Kahve ...")
+        q_words = q_clean.split()
+        t_words = t_clean.split()
+
+        # Tam kelime eşleşmesi
+        if q_words == t_words:
+            return 100.0
+
+        # Başlık tam olarak sorgu ile başlıyorsa
         if t_clean.startswith(q_clean):
             rest = t_clean[len(q_clean):].strip()
             if not rest or rest.isdigit():
                 return 98.0
-            return 88.0
+            rest_words = rest.split()
+            # Başlıkta ek kelimeler varsa (örn: "Lost in Space", "Suits LA") farklı içeriktir
+            return max(30.0, 75.0 - (len(rest_words) * 15.0))
 
-        # Sorgu başlığın içinde geçiyorsa (örn: "The Matrix" -> "Matrix")
-        if q_clean in t_clean:
-            return 80.0
+        # Sorgu başlıkla başlıyorsa
+        if q_clean.startswith(t_clean):
+            rest = q_clean[len(t_clean):].strip()
+            if not rest or rest.isdigit():
+                return 95.0
+            return 60.0
 
-        q_words = q_clean.split()
-        t_words = t_clean.split()
-
-        # Tüm sorgu kelimeleri başlıkta mevcut mu? (Örn: "Rick Morty" -> "Rick and Morty")
-        if all(w in t_words or any(w in tw for tw in t_words) for w in q_words):
-            match_ratio = len(q_words) / max(len(t_words), 1)
-            return max(60.0, match_ratio * 90.0)
-
-        # Kelimelerin çoğu eşleşiyor mu?
-        common_words = set(q_words) & set(t_words)
-        if len(common_words) > 0 and len(common_words) >= (len(q_words) + 1) // 2:
-            return 50.0 + (len(common_words) / len(q_words)) * 30.0
+        # Tüm sorgu kelimeleri başlıkta mevcut mu?
+        if all(w in t_words for w in q_words):
+            extra = len(t_words) - len(q_words)
+            return max(40.0, 85.0 - (extra * 15.0))
 
         # Benzerlik oranı (Fuzzy match)
         seq_ratio = difflib.SequenceMatcher(None, q_clean, t_clean).ratio()
-        if seq_ratio >= 0.55:
+        if seq_ratio >= 0.8:
             return seq_ratio * 100.0
 
         return 0.0
@@ -243,18 +248,29 @@ class Downloader:
         if not results:
             return candidates
 
-        matching_items = [
-            item for item in results 
-            if cls.calculate_relevance(query_title, item.get("title", "")) >= 65.0
-        ]
-        matching_items.sort(
-            key=lambda x: cls.calculate_relevance(query_title, x.get("title", "")), 
-            reverse=True
-        )
+        matching_items = []
+        for item in results:
+            rel = cls.calculate_relevance(query_title, item.get("title", ""))
+            if rel >= 50.0:
+                item["_rel"] = rel
+                matching_items.append(item)
+
+        if not matching_items:
+            return candidates
+
+        max_rel = max((it["_rel"] for it in matching_items), default=0.0)
+        # Eğer yüksek eşleşen (>=85) içerik varsa, daha düşük eşleşen yan dizileri/filmleri havuza hiç dahil etme!
+        if max_rel >= 85.0:
+            matching_items = [it for it in matching_items if it["_rel"] >= 80.0]
+        else:
+            matching_items = [it for it in matching_items if it["_rel"] >= max(50.0, max_rel - 10.0)]
+
+        matching_items.sort(key=lambda x: x.get("_rel", 0.0), reverse=True)
 
         async def _process_item(item):
             p_name = item.get("plugin_name", "")
             i_url = item.get("url", "")
+            i_rel = item.get("_rel", 100.0)
             cand_list = []
             try:
                 detail = await asyncio.wait_for(local_load_item(p_name, i_url), timeout=8)
@@ -275,7 +291,8 @@ class Downloader:
                                     "name": link_name,
                                     "url": link_url,
                                     "ep_url": i_url,
-                                    "title": detail.get("title", "") or item.get("title", "")
+                                    "title": detail.get("title", "") or item.get("title", ""),
+                                    "relevance": i_rel
                                 })
                     except Exception:
                         pass
@@ -296,7 +313,8 @@ class Downloader:
                                                 "name": link_name,
                                                 "url": link_url,
                                                 "ep_url": ep_url,
-                                                "title": detail.get("title", "") or item.get("title", "")
+                                                "title": detail.get("title", "") or item.get("title", ""),
+                                                "relevance": i_rel
                                             })
                                 except Exception:
                                     pass
@@ -320,7 +338,8 @@ class Downloader:
                                             "name": link_name,
                                             "url": link_url,
                                             "ep_url": ep_url,
-                                            "title": ep_title
+                                            "title": ep_title,
+                                            "relevance": i_rel
                                         })
                             except Exception:
                                 pass
@@ -336,13 +355,15 @@ class Downloader:
 
         all_plugins = cls.get_all_plugin_names()
 
-        # Dublaj skoru ve eklenti önceliğine göre sırala
+        # Doğruluk (Relevance) birincil, Dublaj ve Hızlı Kaynak ikincil önceliktedir
         def dublaj_priority_key(c):
             p = c.get("plugin", "")
+            rel = float(c.get("relevance", 100.0))
             is_tr = cls.is_candidate_tr_dublaj(c)
             is_fast_master = p in ["DizipalX", "SineWix", "RecTV", "Vizyona", "Dizipal", "DiziMom", "Dizi65", "FilmModu", "FullHDFilmizlesene", "HDMovie8"]
             
-            score = 0
+            # 1. Öncelik: Kesin İçerik Doğruluğu (Relevance). 100% eşleşen içerik asla farklı diziyle ezilemez!
+            score = int(rel * 10000)
             if is_tr:
                 score += 1000
             if is_fast_master:
