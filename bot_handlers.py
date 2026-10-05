@@ -1065,7 +1065,7 @@ class DiziBotManager:
                     req_uid = req.get("user_id", 0) or 0
                     job_id = db.add_to_queue(title=clean_title, season=s, episode=e, priority=3, requested_by=req_uid)
                     await query.edit_message_text(f"✅ **İstek `#{req_id}` Onaylandı & Kuyruğa Alındı!** (İşlem ID: `{job_id}`)")
-                if req["user_id"]:
+                if req["user_id"] and req["user_id"] not in config.admin_ids:
                     try:
                         await self.app.send_message(
                             chat_id=req["user_id"],
@@ -1531,9 +1531,9 @@ class DiziBotManager:
                         uploaded_ok = True
                         logger.info(f"✅ Başarıyla Yüklendi! Son Mesaj ID: {last_msg_id}")
 
-                        # Talep Eden Kullanıcıya Özel Tamamlandı Bildirimi Gönder
+                        # Talep Eden Normal Kullanıcıya Özel Tamamlandı Bildirimi Gönder (Yöneticiler hariç)
                         req_by = job.get("requested_by", 0)
-                        if req_by and req_by > 0:
+                        if req_by and req_by > 0 and req_by not in config.admin_ids:
                             try:
                                 chat_id_str = str(config.target_chat_id)
                                 clean_cid = chat_id_str[4:] if chat_id_str.startswith("-100") else (chat_id_str[1:] if chat_id_str.startswith("-") else chat_id_str)
