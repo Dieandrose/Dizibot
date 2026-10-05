@@ -60,6 +60,7 @@ class DiziBotManager:
             api_hash=config.api_hash,
             bot_token=config.bot_token
         )
+        self._topic_lock = asyncio.Lock()
         self._register_handlers()
         self.is_processing_queue = False
 
@@ -114,56 +115,64 @@ class DiziBotManager:
         return text, InlineKeyboardMarkup(buttons)
 
     async def get_or_create_series_topic(self, series_title: str, is_movie: bool = False) -> int:
-        if is_movie:
-            target_key = "Filmler"
-            topic_name = "🎬 Filmler"
-        else:
-            target_key, _, _ = Downloader.parse_title_season_episode(series_title)
-            topic_name = f"🎬 {target_key}"
+        async with self._topic_lock:
+            if is_movie:
+                target_key = "Filmler"
+                topic_name = "🎬 Filmler"
+            else:
+                target_key, _, _ = Downloader.parse_title_season_episode(series_title)
+                topic_name = f"🎬 {target_key}"
 
-        existing_id = db.get_topic_id(target_key)
-        if existing_id and existing_id > 0:
-            # Topic'in Telegram tarafında hala canlı ve geçerli olup olmadığını doğrula
-            api_edit_url = f"https://api.telegram.org/bot{config.bot_token}/editForumTopic"
-            async with httpx.AsyncClient(timeout=6.0) as client:
+            # 1. Önce Veritabanında Mevcut mu Kontrol Et
+            existing_id = db.get_topic_id(target_key)
+            if existing_id and existing_id > 0:
+                api_edit_url = f"https://api.telegram.org/bot{config.bot_token}/editForumTopic"
+                async with httpx.AsyncClient(timeout=6.0) as client:
+                    try:
+                        r = await client.post(api_edit_url, json={
+                            "chat_id": config.target_chat_id,
+                            "message_thread_id": existing_id,
+                            "name": topic_name[:128]
+                        })
+                        res_data = r.json()
+                        desc = str(res_data.get("description", ""))
+                        # Konu canlı ve geçerliyse
+                        if res_data.get("ok") or "TOPIC_NOT_MODIFIED" in desc:
+                            return existing_id
+                        # SADECE konu kesinlikle Telegram'da silinmişse veritabanından temizle
+                        elif "TOPIC_ID_INVALID" in desc or "TOPIC_DELETED" in desc:
+                            logger.warning(f"Kayıtlı konu ID ({existing_id}) Telegram'da kalıcı olarak silinmiş ({desc}), temizlenip yeni açılacak.")
+                            with db._get_conn() as conn:
+                                conn.cursor().execute("DELETE FROM topics WHERE series_title = ?", (db._norm_title(target_key),))
+                                conn.commit()
+                        else:
+                            # Geçici hata, yetki veya flood limitlerinde mevcut ID'yi koru
+                            logger.debug(f"Konu yanıtı ({existing_id}): {res_data} - Mevcut konu korunuyor.")
+                            return existing_id
+                    except Exception as e:
+                        logger.debug(f"Konu doğrulama ağ hatası ({existing_id}): {e} - Mevcut konu korunuyor.")
+                        return existing_id
+
+            # 2. Veritabanında yoksa (veya kesin silinmişse) YENİ FORUM KONUSU AÇ
+            api_url = f"https://api.telegram.org/bot{config.bot_token}/createForumTopic"
+            async with httpx.AsyncClient(timeout=15.0) as client:
                 try:
-                    r = await client.post(api_edit_url, json={
+                    resp = await client.post(api_url, json={
                         "chat_id": config.target_chat_id,
-                        "message_thread_id": existing_id,
                         "name": topic_name[:128]
                     })
-                    res_data = r.json()
-                    if res_data.get("ok") or res_data.get("description") == "Bad Request: TOPIC_NOT_MODIFIED":
-                        return existing_id
+                    res_data = resp.json()
+                    if res_data.get("ok"):
+                        new_topic_id = res_data["result"]["message_thread_id"]
+                        db.save_topic(target_key, new_topic_id)
+                        logger.info(f"Yeni Forum Konusu Açıldı: '{topic_name}' (ID: {new_topic_id})")
+                        return new_topic_id
                     else:
-                        logger.warning(f"Kayıtlı konu ID ({existing_id}) geçersiz ({res_data.get('description')}), yeni konu açılıyor...")
-                        with db._get_conn() as conn:
-                            conn.cursor().execute("DELETE FROM topics WHERE series_title = ?", (db._norm_title(target_key),))
-                            conn.commit()
+                        logger.error(f"Forum konusu açılamadı: {res_data}")
                 except Exception as e:
-                    logger.debug(f"Konu doğrulama atlandı: {e}")
-                    return existing_id
+                    logger.error(f"createForumTopic hatası: {e}")
 
-        # Konu yoksa veya Telegram'da silinmişse YENİ FORUM KONUSU AÇ
-        api_url = f"https://api.telegram.org/bot{config.bot_token}/createForumTopic"
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            try:
-                resp = await client.post(api_url, json={
-                    "chat_id": config.target_chat_id,
-                    "name": topic_name[:128]
-                })
-                res_data = resp.json()
-                if res_data.get("ok"):
-                    new_topic_id = res_data["result"]["message_thread_id"]
-                    db.save_topic(target_key, new_topic_id)
-                    logger.info(f"Yeni Forum Konusu Açıldı: '{topic_name}' (ID: {new_topic_id})")
-                    return new_topic_id
-                else:
-                    logger.error(f"Forum konusu açılamadı: {res_data}")
-            except Exception as e:
-                logger.error(f"createForumTopic hatası: {e}")
-
-        return 0
+            return 0
 
     def _register_handlers(self):
         # 0. Satır İçi Arama (Inline Query Handler)
