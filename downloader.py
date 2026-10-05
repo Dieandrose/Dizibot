@@ -379,7 +379,6 @@ class Downloader:
     def is_candidate_tr_dublaj(cls, cand: Dict[str, Any], is_native_turkish: bool = False) -> bool:
         """
         Bir kaynağın kesin olarak Türkçe dublaj / Türkçe ses içerip içermediğini analiz eder.
-        Sadece sitenin adına bakarak asla körü körüne Türkçe dublaj varsaymaz.
         """
         if cand.get("is_dublaj") is True:
             return True
@@ -388,12 +387,13 @@ class Downloader:
         title = (cand.get("title") or "").lower()
         ep_url = (cand.get("ep_url") or "").lower()
         url = (cand.get("url") or "").lower()
-        full_meta = f"{name} {title} {ep_url} {url}"
+        item_title = (cand.get("item_title") or "").lower()
+        full_meta = f"{name} {title} {item_title} {ep_url} {url}"
 
         # 1. Açıkça Dublaj Belirtilmişse -> KESİNLİKLE DUBLAJ
         has_dub = any(k in full_meta for k in [
             "dublaj", "tr dub", "türkçe dublaj", "turkce dublaj", 
-            "tr-dub", "turkce-dub", "(tr)", "[tr]", "türkçe ses", "turkce ses", "dual"
+            "tr-dub", "turkce-dub", "(tr)", "[tr]", "türkçe ses", "turkce ses", "dual", "-dub-"
         ])
 
         # 2. Açıkça Altyazılı / Orijinal Belirtilmişse (ve dublaj denmemişse) -> DUBLAJ DEĞİL

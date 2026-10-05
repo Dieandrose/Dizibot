@@ -1465,12 +1465,10 @@ class DiziBotManager:
                         sub_file.unlink(missing_ok=True)
                     continue
 
-                # 3. İndirilen Dosyanın Gerçek Ses Akışı Analizi (FFprobe Deep Language Check)
+                # 3. İndirilen Dosyanın Gerçek Ses Akışı Analizi (FFprobe Audio Probe)
                 probed_lang = await Downloader.probe_media_audio_language(temp_file)
                 if probed_lang == "tr":
                     is_dublaj = True
-                elif probed_lang and probed_lang != "tr" and not is_native_tr:
-                    is_dublaj = False
 
                 if is_native_tr:
                     audio_badge = "🇹🇷 Yerli Yapım (Türkçe)"
