@@ -208,26 +208,56 @@ class DiziBotManager:
         # 1. /start ve /yardim
         @self.app.on_message(filters.command(["start", "yardim", "help"]))
         async def cmd_start(client: Client, message: Message):
-            help_text = (
-                "🤖 **DiziBot - Otonom Medya & Telegram Yükleyici**\n\n"
-                "**Kullanılabilir Komutlar:**\n"
-                "🔍 `/ara <dizi/film>` - İçerik ara ve butonlarla seçerek indir\n"
-                "📥 `/indir <dizi> <sezon> <bölüm>` - Doğrudan bölüm indir ve yükle\n"
-                "📊 `/durum` - Aktif indirme ve sistem durumu\n"
-                "📋 `/kuyruk` - İndirme kuyruğunu görüntüle\n"
-                "❌ `/iptal <id>` - Kuyruktaki işlemi iptal et\n\n"
-                "**Otomatik Takipçi & Denetim:**\n"
-                "🔔 `/takip <dizi>` - Diziyi otomatik yeni bölüm takibine al\n"
-                "🔕 `/takipbirak <dizi>` - Takip listesinden çıkar\n"
-                "📑 `/takiplistesi` - Takip edilen tüm diziler\n"
-                "🛡️ `/kontrol <dizi>` - Eksik bölümleri tara ve otomatik tamamla\n\n"
-                "**İstek Sistemi:**\n"
-                "✍️ `/istek <içerik adı>` - Yöneticilere dizi/film isteği ilet\n"
-            )
-            if message.from_user and message.from_user.id in config.admin_ids:
-                help_text += "\n👑 **Yönetici:** `/istekler` - Bekleyen istekleri listele"
+            u_id = message.from_user.id if message.from_user else 0
+            is_admin = u_id in config.admin_ids
 
-            await message.reply_text(help_text)
+            help_text = (
+                "👋 **Merhaba! DiziBot'a Hoş Geldiniz.**\n\n"
+                "🎬 **DiziBot**, 50'den fazla yerli ve yabancı kaynaktan içerikleri tarayan, "
+                "Türkçe dublaj ve altyazı desteğiyle doğrudan Telegram forum konularına video olarak yükleyen "
+                "otonom medya asistanınızdır.\n\n"
+                "━━━━━━━━━━━━━━━━━━━━━━\n"
+                "📌 **NASIL KULLANILIR? (REHBER)**\n"
+                "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                "🔍 **1. İçerik Arama:**\n"
+                "• `/ara <dizi veya film adı>`\n"
+                "• *Örnek:* `/ara Suits` veya `/ara Inception`\n"
+                "• İçerik grupta zaten yüklüyse en üstteki **`📍 Forumda Mevcut`** butonuna basarak doğrudan konuya gidebilirsiniz.\n"
+                "• Yüklü değilse menüden Sezon / Bölüm seçerek kolayca talep edebilirsiniz.\n\n"
+                "✍️ **2. Dizi / Film İsteği Bildirme:**\n"
+                "• `/istek <içerik adı ve sezonu>`\n"
+                "• *Örnek:* `/istek Prison Break 1. Sezon`\n"
+                "• İsteğiniz anında yöneticilere iletilir; onaylandığında otomatik olarak indirilip gruba yüklenir.\n\n"
+                "📊 **3. İndirme & Yükleme Takibi:**\n"
+                "• `/durum` - Kuyruktaki aktif indirme/yükleme durumunu ve ilerlemesini canlı takip edin.\n\n"
+                "🌐 **Web Sitemiz:** [izle.darkbox.com.tr:9443](https://izle.darkbox.com.tr:9443)\n"
+            )
+
+            if is_admin:
+                help_text += (
+                    "\n━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "👑 **YÖNETİCİ KONTROL PANELİ**\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "📥 `/indir <Dizi> <Sezon> <Bölüm>` ➔ Doğrudan kuyruğa ekle\n"
+                    "❌ `/iptal <id>` | `/iptal hepsi` ➔ İndirmeyi anında durdur\n"
+                    "🔔 `/takip <Dizi>` | `/takipbirak <Dizi>` ➔ Yeni bölüm takibi\n"
+                    "📑 `/takiplistesi` ➔ Takip edilen diziler\n"
+                    "🛡️ `/kontrol <Dizi>` ➔ Eksik bölümleri otomatik tamamla\n"
+                    "📋 `/istekler` ➔ Bekleyen üye isteklerini yönet\n"
+                    "📌 `/konular` | `/konubagla <Dizi>` ➔ Forum konularını yönet\n"
+                )
+
+            start_markup = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🔍 Hızlı İçerik Ara", switch_inline_query_current_chat=""),
+                    InlineKeyboardButton("📊 Canlı Durum", callback_data="status_ref")
+                ],
+                [
+                    InlineKeyboardButton("🌐 DarkBox Web Sitemiz", url="https://izle.darkbox.com.tr:9443")
+                ]
+            ])
+
+            await message.reply_text(help_text, reply_markup=start_markup, disable_web_page_preview=True)
 
         # 2. /ara <içerik>
         @self.app.on_message(filters.command(["ara", "search"]))
