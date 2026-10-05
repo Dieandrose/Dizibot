@@ -630,6 +630,7 @@ class Downloader:
                 return joined
 
             # Master Playlist kontrolü
+            has_turkish_audio_track = False
             if any("#EXT-X-STREAM-INF" in l for l in lines) or any("#EXT-X-MEDIA:TYPE=" in l for l in lines):
                 # Tekil Ses Akışı Tespiti (Varsa Türkçe veya Birincil Ses)
                 for l in lines:
@@ -643,6 +644,7 @@ class Downloader:
                             lang = (m_lang.group(1) if m_lang else "").lower()
                             if any(x in name or x in lang for x in ["tur", "türk", "turkish", "tr", "dublaj"]):
                                 audio_tr_url = u
+                                has_turkish_audio_track = True
                                 break
                             elif not audio_tr_url:
                                 audio_tr_url = u
@@ -915,6 +917,14 @@ class Downloader:
                 ]
 
             # Anında Ultra Hızlı Birleştirme (Kayıpsız 0-CPU Passthrough / Direct Stream Copy)
+            audio_meta = []
+            if has_turkish_audio_track:
+                audio_meta = [
+                    "-metadata:s:a:0", "language=tur",
+                    "-metadata:s:a:0", "title=Türkçe Dublaj",
+                    "-metadata:s:a:0", "handler_name=Türkçe Dublaj"
+                ]
+
             if tmp_audio_tr_file and tmp_audio_tr_file.exists() and tmp_audio_tr_file.stat().st_size > 0:
                 cmd = [
                     "ffmpeg", "-y",
@@ -928,6 +938,7 @@ class Downloader:
                     "-c:v", "copy",
                     "-c:a", "copy",
                     "-bsf:a", "aac_adtstoasc",
+                    *audio_meta,
                     *sub_meta,
                     "-movflags", "+faststart",
                     str(output_path)
@@ -944,6 +955,7 @@ class Downloader:
                     "-c:v", "copy",
                     "-c:a", "copy",
                     "-bsf:a", "aac_adtstoasc",
+                    *audio_meta,
                     *sub_meta,
                     "-movflags", "+faststart",
                     str(output_path)
@@ -987,7 +999,9 @@ class Downloader:
                 "success": True,
                 "audio_track_count": 1,
                 "has_multi_audio": False,
-                "has_subtitles": False
+                "has_subtitles": bool(subtitle_path and subtitle_path.exists()),
+                "is_dublaj": has_turkish_audio_track,
+                "audio_lang": "tr" if has_turkish_audio_track else "en"
             }
 
     @classmethod

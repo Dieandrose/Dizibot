@@ -1465,7 +1465,10 @@ class DiziBotManager:
                         sub_file.unlink(missing_ok=True)
                     continue
 
-                # 3. İndirilen Dosyanın Gerçek Ses Akışı Analizi (FFprobe Audio Probe)
+                # 3. İndirilen Dosyanın Gerçek Ses Akışı Analizi (HLS Master & FFprobe Audio Probe)
+                if dl_res and dl_res.get("is_dublaj"):
+                    is_dublaj = True
+
                 probed_lang = await Downloader.probe_media_audio_language(temp_file)
                 if probed_lang == "tr":
                     is_dublaj = True
