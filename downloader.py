@@ -976,13 +976,13 @@ class Downloader:
                     except Exception:
                         pass
 
-            # Altyazı Gömme Modu (Hardsub: Aç-Kapa Olmaksızın Doğrudan Piksele Gömülü Altyazı)
+            # Altyazı Gömme Modu (Hardsub: SADECE içerik Türkçe Dublaj DEĞİLSE Altyazı Gömer)
             has_hardsub = False
             video_encoding_args = ["-c:v", "copy"]
-            if subtitle_path and subtitle_path.exists() and subtitle_path.stat().st_size > 0:
+            if subtitle_path and subtitle_path.exists() and subtitle_path.stat().st_size > 0 and not has_turkish_audio_track:
                 srt_escaped = str(subtitle_path).replace("\\", "/").replace(":", "\\:")
                 vf_str = f"subtitles='{srt_escaped}':force_style='FontName=DejaVu Sans,FontSize=21,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1.8,Shadow=0.6,MarginV=25'"
-                video_encoding_args = ["-vf", vf_str, "-c:v", "libx264", "-preset", "veryfast", "-crf", "22"]
+                video_encoding_args = ["-vf", vf_str, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22"]
                 has_hardsub = True
 
             # Anında Ultra Hızlı Birleştirme
