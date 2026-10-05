@@ -52,6 +52,19 @@ LIVE_TRANSFERS: Dict[int, Dict[str, Any]] = {}
 ACTIVE_TASKS: Dict[int, asyncio.Task] = {}
 
 
+def safe_int_num(val, default=1) -> int:
+    """Metin veya sayısal sezon/bölüm değerlerini güvenli tamsayıya (int) çevirir."""
+    if isinstance(val, int):
+        return val
+    try:
+        m = re.search(r'\d+', str(val))
+        if m:
+            return int(m.group(0))
+        return int(val)
+    except Exception:
+        return default
+
+
 class DiziBotManager:
     def __init__(self):
         proxy_dict = None
@@ -562,12 +575,12 @@ class DiziBotManager:
                         detail = await local_load_item(item.get("plugin_name", ""), item.get("url", ""))
                         episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
                         episodes.sort(key=lambda ep: (
-                            ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1),
-                            ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                            safe_int_num(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)),
+                            safe_int_num(ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1))
                         ))
                         for ep in episodes:
-                            s_num = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
-                            e_num = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                            s_num = safe_int_num(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1))
+                            e_num = safe_int_num(ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1))
                             if s_num == target_s:
                                 db.add_to_queue(title=clean_title, season=s_num, episode=e_num, priority=3, requested_by=u_id)
                                 queued_count += 1
@@ -597,16 +610,16 @@ class DiziBotManager:
                     if not has_explicit_ep and not season_match:
                         if is_series_found and episodes:
                             episodes.sort(key=lambda ep: (
-                                ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1),
-                                ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                                safe_int_num(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)),
+                                safe_int_num(ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1))
                             ))
                             added = 0
                             seasons_set = set()
                             p_name = item.get("plugin_name", "") if item else ""
                             i_url = item.get("url", "") if item else ""
                             for ep in episodes:
-                                s_num = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
-                                e_num = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                                s_num = safe_int_num(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1))
+                                e_num = safe_int_num(ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1))
                                 db.add_to_queue(title=clean_title, season=s_num, episode=e_num, plugin_name=p_name, item_url=i_url, priority=2, requested_by=u_id)
                                 added += 1
                                 seasons_set.add(s_num)
@@ -814,15 +827,15 @@ class DiziBotManager:
                 detail = await local_load_item(plugin, url)
                 episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
                 episodes.sort(key=lambda ep: (
-                    ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1),
-                    ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                    safe_int_num(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)),
+                    safe_int_num(ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1))
                 ))
 
                 added = 0
                 seasons_set = set()
                 for ep in episodes:
-                    s = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
-                    e = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                    s = safe_int_num(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1))
+                    e = safe_int_num(ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1))
                     db.add_to_queue(title=title, season=s, episode=e, plugin_name=plugin, item_url=url, priority=2, requested_by=user_id)
                     added += 1
                     seasons_set.add(s)
@@ -882,14 +895,18 @@ class DiziBotManager:
                     logger.warning(f"Plugin {plugin} load_item hata: {load_err}")
 
                 episodes = (detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])) if detail else []
+                episodes.sort(key=lambda ep: (
+                    safe_int_num(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)),
+                    safe_int_num(ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1))
+                ))
                 ep_buttons = []
                 # En üste SEÇİLİ SEZONU İNDİR butonu
                 ep_buttons.append([InlineKeyboardButton(f"📥 {season}. SEZONU İNDİR (Tüm Bölümler)", callback_data=f"dl_all_s:{idx}:{season}")])
 
                 row = []
                 for ep in episodes:
-                    s_num = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
-                    e_num = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                    s_num = safe_int_num(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1))
+                    e_num = safe_int_num(ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1))
                     if s_num == season:
                         row.append(InlineKeyboardButton(f"{e_num}. Bölüm", callback_data=f"dl_ep:{idx}:{s_num}:{e_num}"))
                         if len(row) == 4:
@@ -977,14 +994,14 @@ class DiziBotManager:
                 detail = await local_load_item(plugin, url)
                 episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
                 episodes.sort(key=lambda ep: (
-                    ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1),
-                    ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                    safe_int_num(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)),
+                    safe_int_num(ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1))
                 ))
 
                 added = 0
                 for ep in episodes:
-                    s = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
-                    e = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                    s = safe_int_num(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1))
+                    e = safe_int_num(ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1))
                     if s == s_num:
                         db.add_to_queue(title=title, season=s, episode=e, plugin_name=plugin, item_url=url, priority=2, requested_by=user_id)
                         added += 1
@@ -1042,13 +1059,13 @@ class DiziBotManager:
 
                         episodes = (detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])) if detail else []
                         episodes.sort(key=lambda ep: (
-                            ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1),
-                            ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                            safe_int_num(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)),
+                            safe_int_num(ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1))
                         ))
                         req_uid = req.get("user_id", 0) or 0
                         for ep in episodes:
-                            s_num = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
-                            e_num = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                            s_num = safe_int_num(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1))
+                            e_num = safe_int_num(ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1))
                             if s_num == target_s:
                                 db.add_to_queue(title=clean_title, season=s_num, episode=e_num, priority=3, requested_by=req_uid)
                                 queued_count += 1
@@ -1084,8 +1101,8 @@ class DiziBotManager:
                             pass
                     if is_series_found and episodes:
                         episodes.sort(key=lambda ep: (
-                            ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1),
-                            ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                            safe_int_num(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)),
+                            safe_int_num(ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1))
                         ))
                         added = 0
                         seasons_set = set()
@@ -1093,8 +1110,8 @@ class DiziBotManager:
                         i_url = item.get("url", "") if item else ""
                         req_uid = req.get("user_id", 0) or 0
                         for ep in episodes:
-                            s_num = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
-                            e_num = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                            s_num = safe_int_num(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1))
+                            e_num = safe_int_num(ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1))
                             db.add_to_queue(title=clean_title, season=s_num, episode=e_num, plugin_name=p_name, item_url=i_url, priority=2, requested_by=req_uid)
                             added += 1
                             seasons_set.add(s_num)
@@ -1697,8 +1714,8 @@ class DiziBotManager:
         
         all_candidate_eps = []
         for ep in episodes:
-            s = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
-            e = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+            s = safe_int_num(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1))
+            e = safe_int_num(ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1))
             if target_season is not None and s != target_season:
                 continue
             all_candidate_eps.append((s, e))

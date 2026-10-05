@@ -1022,12 +1022,17 @@ async def main():
 
             if series_detail and series_detail.get("episodes"):
                 episodes = series_detail.get("episodes", [])
-                episodes.sort(key=lambda x: (x.get("season", 1), x.get("episode", 1)))
+                episodes.sort(key=lambda x: (
+                    int(re.search(r'\d+', str(x.get("season", 1))).group(0)) if re.search(r'\d+', str(x.get("season", 1))) else 1,
+                    int(re.search(r'\d+', str(x.get("episode", 1))).group(0)) if re.search(r'\d+', str(x.get("episode", 1))) else 1
+                ))
                 print(f"Toplam {len(episodes)} bölüm bulundu ({series_detail.get('title')}).")
                 
                 for ep in episodes:
-                    s_num = ep.get("season", 1)
-                    e_num = ep.get("episode", 1)
+                    s_m = re.search(r'\d+', str(ep.get("season", 1)))
+                    e_m = re.search(r'\d+', str(ep.get("episode", 1)))
+                    s_num = int(s_m.group(0)) if s_m else 1
+                    e_num = int(e_m.group(0)) if e_m else 1
                     if season_target > 0 and s_num != season_target:
                         continue
                     if e_num < from_ep and (season_target == 0 or s_num == season_target):

@@ -351,7 +351,7 @@ class Database:
         with self._get_conn() as conn:
             cur = conn.cursor()
             cur.execute(
-                "SELECT * FROM download_queue WHERE status = 'queued' ORDER BY priority DESC, season ASC, episode ASC, id ASC LIMIT 1"
+                "SELECT * FROM download_queue WHERE status = 'queued' ORDER BY priority DESC, title ASC, CAST(season AS INTEGER) ASC, CAST(episode AS INTEGER) ASC, id ASC LIMIT 1"
             )
             row = cur.fetchone()
             if row:
