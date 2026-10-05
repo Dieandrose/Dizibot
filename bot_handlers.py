@@ -1348,6 +1348,7 @@ class DiziBotManager:
 
         # 1. Konu ID'sini Bul / Aç (Filmler tekil '🎬 Filmler' konusuna, Diziler kendi dizisi konusuna)
         topic_id = await self.get_or_create_series_topic(clean_title, is_movie=is_movie)
+        is_native_tr = await Downloader.detect_native_turkish(clean_title)
 
         # 2. Aday Akışları Bul (Önce seçilen plugin ve link, ardından fallback zinciri)
         candidates = []
@@ -1435,12 +1436,12 @@ class DiziBotManager:
                     db.update_queue_progress(job_id, "downloading", 0.73 if phase == "muxing" else pct * 0.7)
 
                 # 1. Öncelik: Türkçe Ses / Dublaj Tespiti
-                is_dublaj = Downloader.is_candidate_tr_dublaj(cand)
+                is_dublaj = Downloader.is_candidate_tr_dublaj(cand, is_native_turkish=is_native_tr)
 
                 # 2. Öncelik (Fallback): SADECE içerik kesinlikle Türkçe dublaj DEĞİLSE OpenSubtitles'dan altyazı ara
                 sub_file = None
-                if not is_dublaj:
-                    logger.info(f"İçerik orijinal dilde ({p_name}), OpenSubtitles üzerinden Türkçe altyazı aranıyor: {clean_title}")
+                if not is_dublaj and not is_native_tr:
+                    logger.info(f"İçerik yabancı/orijinal dilde ({p_name}), OpenSubtitles üzerinden Türkçe altyazı aranıyor: {clean_title}")
                     try:
                         sub_file = await Downloader.fetch_and_prepare_opensubtitles(
                             clean_title, 
@@ -1464,7 +1465,17 @@ class DiziBotManager:
                         sub_file.unlink(missing_ok=True)
                     continue
 
-                if is_dublaj:
+                # 3. İndirilen Dosyanın Gerçek Ses Akışı Analizi (FFprobe Deep Language Check)
+                probed_lang = await Downloader.probe_media_audio_language(temp_file)
+                if probed_lang == "tr":
+                    is_dublaj = True
+                elif probed_lang and probed_lang != "tr" and not is_native_tr:
+                    is_dublaj = False
+
+                if is_native_tr:
+                    audio_badge = "🇹🇷 Yerli Yapım (Türkçe)"
+                    sub_badge = ""
+                elif is_dublaj:
                     audio_badge = "🇹🇷 Türkçe Dublaj"
                     sub_badge = ""
                 elif sub_file:

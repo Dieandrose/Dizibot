@@ -419,6 +419,57 @@ class Downloader:
         return False
 
     @classmethod
+    async def detect_native_turkish(cls, title: str) -> bool:
+        """TMDB üzerinden içeriğin orijinal dilinin Türkçe veya menşeinin Türkiye olup olmadığını doğrular."""
+        import httpx
+        clean_title = re.sub(r'[\(\[\{].*?[\)\]\}]', '', title).strip()
+        clean_title = re.sub(r'\s*\d+\.\s*Sezon.*$', '', clean_title, flags=re.I).strip()
+        try:
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                tmdb_url = f"https://mid.vidzee.wtf/tmdb/search/multi?query={urllib.parse.quote(clean_title)}&page=1&include_adult=false&api_key=adc48d20c0956934fb224de5c40bb85d&language=tr-TR"
+                res = await client.get(tmdb_url)
+                if res.status_code == 200:
+                    data = res.json()
+                    results = data.get("results", [])
+                    if results:
+                        top = results[0]
+                        orig_lang = (top.get("original_language") or "").lower()
+                        origin_countries = top.get("origin_country") or []
+                        if orig_lang == "tr" or "TR" in origin_countries:
+                            return True
+        except Exception:
+            pass
+        return False
+
+    @classmethod
+    async def probe_media_audio_language(cls, video_path: Path) -> Optional[str]:
+        """İndirilen videonun ses akışının dil etiketini (tur, eng vb.) ffprobe ile derinlemesine analiz eder."""
+        try:
+            cmd = [
+                "ffprobe", "-v", "error",
+                "-select_streams", "a",
+                "-show_entries", "stream_tags=language,title:format_tags=language,title",
+                "-of", "json",
+                str(video_path)
+            ]
+            proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout, _ = await proc.communicate()
+            data = json.loads(stdout.decode())
+            for stream in data.get("streams", []):
+                tags = stream.get("tags", {})
+                lang = (tags.get("language") or "").lower()
+                title = (tags.get("title") or "").lower()
+                if any(t in lang or t in title for t in ["tur", "tr", "turkish", "turkce"]):
+                    return "tr"
+                if any(t in lang or t in title for t in ["eng", "en", "english"]):
+                    return "en"
+                if lang:
+                    return lang
+        except Exception:
+            pass
+        return None
+
+    @classmethod
     async def fetch_and_prepare_opensubtitles(
         cls, 
         title: str, 
