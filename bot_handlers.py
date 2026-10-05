@@ -1425,10 +1425,10 @@ class DiziBotManager:
                         sub_text = f"\n🗣️ **Dil:** {audio_badge}" + (f"\n💬 **Altyazı:** {sub_badge}" if sub_badge else "")
                         if is_movie:
                             caption = (
-                                f"🎬 **{clean_title}**{part_tag}\n\n"
+                                f"🎬 **{clean_title}**{part_tag}\n"
                                 f"📌 **Tür:** Film"
                                 f"{sub_text}\n"
-                                f"📦 **Boyut:** {part_fsize / (1024*1024):.1f} MB\n\n"
+                                f"📦 **Boyut:** {part_fsize / (1024*1024):.1f} MB\n"
                                 f"🌐 [Web Sitemiz]({config.website_url}) • 👥 [Telegram Grubumuz]({config.invite_link})"
                             )
                         else:
@@ -1436,7 +1436,7 @@ class DiziBotManager:
                                 f"🎬 **{clean_title}**{part_tag}\n"
                                 f"📌 **{season}. Sezon {episode}. Bölüm**"
                                 f"{sub_text}\n"
-                                f"📦 **Boyut:** {part_fsize / (1024*1024):.1f} MB\n\n"
+                                f"📦 **Boyut:** {part_fsize / (1024*1024):.1f} MB\n"
                                 f"🌐 [Web Sitemiz]({config.website_url}) • 👥 [Telegram Grubumuz]({config.invite_link})"
                             )
 
