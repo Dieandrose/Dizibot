@@ -230,7 +230,8 @@ class DiziBotManager:
                 "• İsteğiniz anında yöneticilere iletilir; onaylandığında otomatik olarak indirilip gruba yüklenir.\n\n"
                 "📊 **3. İndirme & Yükleme Takibi:**\n"
                 "• `/durum` - Kuyruktaki aktif indirme/yükleme durumunu ve ilerlemesini canlı takip edin.\n\n"
-                "🌐 **Web Sitemiz:** [izle.darkbox.com.tr:9443](https://izle.darkbox.com.tr:9443)\n"
+                f"🌐 **Web Sitemiz:** {config.website_url}\n"
+                f"👥 **Telegram Grubumuz:** {config.invite_link}\n"
             )
 
             if is_admin:
@@ -253,7 +254,8 @@ class DiziBotManager:
                     InlineKeyboardButton("📊 Canlı Durum", callback_data="status_ref")
                 ],
                 [
-                    InlineKeyboardButton("🌐 DarkBox Web Sitemiz", url="https://izle.darkbox.com.tr:9443")
+                    InlineKeyboardButton("🌐 Web Sitemiz", url=config.website_url),
+                    InlineKeyboardButton("👥 Telegram Grubumuz", url=config.invite_link)
                 ]
             ])
 
@@ -1428,7 +1430,8 @@ class DiziBotManager:
                                 f"📌 **Tür:** Film"
                                 f"{sub_text}\n"
                                 f"📦 **Boyut:** {part_fsize / (1024*1024):.1f} MB\n\n"
-                                f"🌐 **Daha Fazlası İçin :**  izle.darkbox.com.tr:9443"
+                                f"🌐 **Web Sitemiz:** {config.website_url}\n"
+                                f"👥 **Telegram Grubumuz:** {config.invite_link}"
                             )
                         else:
                             caption = (
@@ -1436,7 +1439,8 @@ class DiziBotManager:
                                 f"📌 **{season}. Sezon {episode}. Bölüm**"
                                 f"{sub_text}\n"
                                 f"📦 **Boyut:** {part_fsize / (1024*1024):.1f} MB\n\n"
-                                f"🌐 **Daha Fazlası İçin :**  izle.darkbox.com.tr:9443"
+                                f"🌐 **Web Sitemiz:** {config.website_url}\n"
+                                f"👥 **Telegram Grubumuz:** {config.invite_link}"
                             )
 
                         # Telegram'a Yükle (Canlı İlerleme Takibi)

@@ -41,6 +41,8 @@ class Config:
         self.target_chat_id: int = -1001909587016
         self.admin_ids: List[int] = [1080169172]  # Sahip / Admin Telegram ID
         self.proxy: str = "socks5://127.0.0.1:4000"  # WARP / MASQUE Proxy
+        self.invite_link: str = "https://t.me/+_gKDymkpjtZmMzg8"  # Grup Davet Linki
+        self.website_url: str = "https://izle.darkbox.com.tr:9443"  # Web Sitesi
         self.check_interval_tracker: int = 900  # 15 dakika
         self.max_file_size_bytes: int = int(1950 * 1024 * 1024)  # 1.95 GB
         self.max_concurrent_workers: int = 1  # Sıralı ve hatasız yükleme için tekil işlem
@@ -81,6 +83,8 @@ class Config:
         self.admin_ids = [int(a.strip()) for a in admin_raw.split(",") if a.strip().isdigit()]
 
         self.proxy = os.environ.get("TG_UPLOADER_PROXY") or env_vars.get("TG_UPLOADER_PROXY") or "http://127.0.0.1:4000"
+        self.invite_link = os.environ.get("TG_INVITE_LINK") or env_vars.get("TG_INVITE_LINK") or "https://t.me/+_gKDymkpjtZmMzg8"
+        self.website_url = os.environ.get("WEB_SITE_URL") or env_vars.get("WEB_SITE_URL") or "https://izle.darkbox.com.tr:9443"
         self.check_interval_tracker = int(os.environ.get("TRACKER_INTERVAL") or env_vars.get("TRACKER_INTERVAL") or 900)
 
 config = Config()
