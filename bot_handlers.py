@@ -865,13 +865,23 @@ class DiziBotManager:
                     await query.answer("⚠️ Süre aşımı.", show_alert=True)
                     return
 
+                try:
+                    await query.answer("⏳ Bölümler listeleniyor...")
+                except Exception:
+                    pass
+
                 selected_item = user_cache[idx]
                 plugin = selected_item.get("plugin_name", "")
                 url = selected_item.get("url", "")
                 title = selected_item.get("title", "")
 
-                detail = await local_load_item(plugin, url)
-                episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
+                detail = None
+                try:
+                    detail = await asyncio.wait_for(local_load_item(plugin, url), timeout=6.0)
+                except Exception as load_err:
+                    logger.warning(f"Plugin {plugin} load_item hata: {load_err}")
+
+                episodes = (detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])) if detail else []
                 ep_buttons = []
                 # En üste SEÇİLİ SEZONU İNDİR butonu
                 ep_buttons.append([InlineKeyboardButton(f"📥 {season}. SEZONU İNDİR (Tüm Bölümler)", callback_data=f"dl_all_s:{idx}:{season}")])
@@ -988,6 +998,12 @@ class DiziBotManager:
                 if user_id not in config.admin_ids:
                     await query.answer("⚠️ Sadece yöneticiler onaylayabilir.", show_alert=True)
                     return
+
+                try:
+                    await query.answer("⏳ İstek onaylanıyor...")
+                except Exception:
+                    pass
+
                 req_id = int(data.split(":")[1])
                 req = db.get_request(req_id)
                 if not req:
@@ -998,18 +1014,33 @@ class DiziBotManager:
                 req_uid = req.get("user_id", 0) or 0
                 db.update_request_status(req_id, "approved", admin_id=user_id)
 
+                try:
+                    await query.edit_message_text(f"⏳ **İstek `#{req_id}` Onaylandı!** İçerik taranıyor ve kuyruğa alınıyor...")
+                except Exception:
+                    pass
+
                 # Sezon tespiti kontrolü
                 season_match = re.search(r"(\d+)\s*\.?\s*sezon", req["query"], re.IGNORECASE)
                 has_explicit_ep = bool(re.search(r"(\d+)\s*\.?\s*bölüm|s\d+e\d+|e\d+", req["query"], re.IGNORECASE))
 
                 if season_match and not has_explicit_ep:
                     target_s = int(season_match.group(1))
-                    results = await Downloader.search_all_plugins(clean_title)
+                    results = []
+                    try:
+                        results = await asyncio.wait_for(Downloader.search_all_plugins(clean_title), timeout=6.0)
+                    except Exception:
+                        results = []
+
                     queued_count = 0
                     if results:
                         item = results[0]
-                        detail = await local_load_item(item.get("plugin_name", ""), item.get("url", ""))
-                        episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
+                        detail = None
+                        try:
+                            detail = await asyncio.wait_for(local_load_item(item.get("plugin_name", ""), item.get("url", "")), timeout=6.0)
+                        except Exception:
+                            detail = None
+
+                        episodes = (detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])) if detail else []
                         episodes.sort(key=lambda ep: (
                             ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1),
                             ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
@@ -1022,20 +1053,31 @@ class DiziBotManager:
                                 db.add_to_queue(title=clean_title, season=s_num, episode=e_num, priority=3, requested_by=req_uid)
                                 queued_count += 1
                     if queued_count > 0:
-                        await query.edit_message_text(f"✅ **İstek `#{req_id}` Onaylandı!** '{clean_title} {target_s}. Sezon' ({queued_count} bölüm) kuyruğa alındı.")
+                        try:
+                            await query.edit_message_text(f"✅ **İstek `#{req_id}` Onaylandı!** '{clean_title} {target_s}. Sezon' ({queued_count} bölüm) kuyruğa alındı.")
+                        except Exception:
+                            pass
                     else:
                         job_id = db.add_to_queue(title=clean_title, season=target_s, episode=1, priority=3, requested_by=req_uid)
-                        await query.edit_message_text(f"✅ **İstek `#{req_id}` Onaylandı!** (İşlem ID: `{job_id}`)")
+                        try:
+                            await query.edit_message_text(f"✅ **İstek `#{req_id}` Onaylandı!** (İşlem ID: `{job_id}`)")
+                        except Exception:
+                            pass
                 elif not has_explicit_ep and not season_match:
-                    results = await Downloader.search_all_plugins(clean_title)
+                    results = []
+                    try:
+                        results = await asyncio.wait_for(Downloader.search_all_plugins(clean_title), timeout=6.0)
+                    except Exception:
+                        results = []
+
                     is_series_found = False
                     item = None
                     episodes = []
                     if results:
                         try:
                             item = results[0]
-                            detail = await local_load_item(item.get("plugin_name", ""), item.get("url", ""))
-                            episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
+                            detail = await asyncio.wait_for(local_load_item(item.get("plugin_name", ""), item.get("url", "")), timeout=6.0)
+                            episodes = (detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])) if detail else []
                             if episodes and (len(episodes) > 1 or "/dizi/" in item.get("url", "")):
                                 is_series_found = True
                         except Exception:
@@ -1056,15 +1098,24 @@ class DiziBotManager:
                             db.add_to_queue(title=clean_title, season=s_num, episode=e_num, plugin_name=p_name, item_url=i_url, priority=2, requested_by=req_uid)
                             added += 1
                             seasons_set.add(s_num)
-                        await query.edit_message_text(f"✅ **İstek `#{req_id}` Onaylandı!** '{clean_title}' dizisinin tüm sezonları ({len(seasons_set)} sezon, {added} bölüm) kuyruğa alındı.")
+                        try:
+                            await query.edit_message_text(f"✅ **İstek `#{req_id}` Onaylandı!** '{clean_title}' dizisinin tüm sezonları ({len(seasons_set)} sezon, {added} bölüm) kuyruğa alındı.")
+                        except Exception:
+                            pass
                     else:
                         req_uid = req.get("user_id", 0) or 0
                         job_id = db.add_to_queue(title=clean_title, season=0, episode=0, priority=3, requested_by=req_uid)
-                        await query.edit_message_text(f"✅ **İstek `#{req_id}` Onaylandı!** '{clean_title}' (Film) kuyruğa alındı. (İşlem ID: `{job_id}`)")
+                        try:
+                            await query.edit_message_text(f"✅ **İstek `#{req_id}` Onaylandı!** '{clean_title}' (Film) kuyruğa alındı. (İşlem ID: `{job_id}`)")
+                        except Exception:
+                            pass
                 else:
                     req_uid = req.get("user_id", 0) or 0
                     job_id = db.add_to_queue(title=clean_title, season=s, episode=e, priority=3, requested_by=req_uid)
-                    await query.edit_message_text(f"✅ **İstek `#{req_id}` Onaylandı & Kuyruğa Alındı!** (İşlem ID: `{job_id}`)")
+                    try:
+                        await query.edit_message_text(f"✅ **İstek `#{req_id}` Onaylandı & Kuyruğa Alındı!** (İşlem ID: `{job_id}`)")
+                    except Exception:
+                        pass
                 if req["user_id"] and req["user_id"] not in config.admin_ids:
                     try:
                         await self.app.send_message(
@@ -1082,16 +1133,23 @@ class DiziBotManager:
                     return
                 req_id = int(data.split(":")[1])
                 db.update_request_status(req_id, "rejected", admin_id=user_id)
-                await query.edit_message_text(f"❌ **İstek `#{req_id}` Reddedildi.**")
+                try:
+                    await query.answer("❌ İstek reddedildi.")
+                    await query.edit_message_text(f"❌ **İstek `#{req_id}` Reddedildi.**")
+                except Exception:
+                    pass
 
             # 7. Durum Canlı Yenileme Butonu
             elif data == "status_ref":
+                try:
+                    await query.answer("🔄 Durum güncellendi.")
+                except Exception:
+                    pass
                 text, markup = self.get_system_status_report(user_id=user_id)
                 try:
                     await query.edit_message_text(text, reply_markup=markup)
-                    await query.answer("🔄 Durum güncellendi.")
                 except Exception:
-                    await query.answer("Durum güncel.")
+                    pass
 
             # 8. Buton ile Tekil İptal
             elif data.startswith("cancel_job:"):
