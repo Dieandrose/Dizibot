@@ -1256,6 +1256,16 @@ class DiziBotManager:
                 live_shown += 1
                 if is_admin:
                     buttons.append([InlineKeyboardButton(f"❌ #{job_id} İptal Et", callback_data=f"cancel_job:{job_id}")])
+            elif t_info and t_info.get("phase") == "hardsub":
+                text += (
+                    f"🎬 **{disp_title}**\n"
+                    f"• Aşama: ✍️ `ALTYAZI GÖMÜLÜYOR` (Hardsub Kodlama)\n"
+                    f"• Durum: `🎬 Aç/kapa gerektirmeyen Türkçe altyazı videoya işleniyor...`\n"
+                    f"• İşlem ID: `#{job_id}`\n\n"
+                )
+                live_shown += 1
+                if is_admin:
+                    buttons.append([InlineKeyboardButton(f"❌ #{job_id} İptal Et", callback_data=f"cancel_job:{job_id}")])
             elif t_info and t_info.get("phase") in ["muxing", "preparing"]:
                 text += (
                     f"🎬 **{disp_title}**\n"

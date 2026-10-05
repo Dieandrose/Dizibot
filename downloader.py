@@ -976,16 +976,23 @@ class Downloader:
                     except Exception:
                         pass
 
-            # Altyazı Gömme Modu (Hardsub: SADECE içerik Türkçe Dublaj DEĞİLSE Altyazı Gömer)
-            has_hardsub = False
-            video_encoding_args = ["-c:v", "copy"]
+            # Altyazı Girişi (Kayıpsız 0-CPU Passthrough / Native Softsub Track)
+            sub_inputs = []
+            sub_maps = []
+            sub_meta = []
             if subtitle_path and subtitle_path.exists() and subtitle_path.stat().st_size > 0 and not has_turkish_audio_track:
-                srt_escaped = str(subtitle_path).replace("\\", "/").replace(":", "\\:")
-                vf_str = f"subtitles='{srt_escaped}':force_style='FontName=DejaVu Sans,FontSize=21,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1.8,Shadow=0.6,MarginV=25'"
-                video_encoding_args = ["-vf", vf_str, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22"]
-                has_hardsub = True
+                sub_inputs = ["-i", str(subtitle_path)]
+                sub_idx = 2 if (tmp_audio_tr_file and tmp_audio_tr_file.exists() and tmp_audio_tr_file.stat().st_size > 0) else 1
+                sub_maps = ["-map", f"{sub_idx}:s:0"]
+                sub_meta = [
+                    "-c:s", "mov_text",
+                    "-metadata:s:s:0", "language=tur",
+                    "-metadata:s:s:0", "title=Türkçe",
+                    "-metadata:s:s:0", "handler_name=Türkçe",
+                    "-disposition:s:0", "default"
+                ]
 
-            # Anında Ultra Hızlı Birleştirme
+            # Anında Ultra Hızlı Birleştirme (Kayıpsız 0.5 sn Direct Stream Copy)
             audio_meta = []
             if has_turkish_audio_track:
                 audio_meta = [
@@ -1000,12 +1007,15 @@ class Downloader:
                     "-threads", "0",
                     "-i", str(tmp_video_file),
                     "-i", str(tmp_audio_tr_file),
+                    *sub_inputs,
                     "-map", "0:v:0",
                     "-map", "1:a:0",
-                    *video_encoding_args,
+                    *sub_maps,
+                    "-c:v", "copy",
                     "-c:a", "copy",
                     "-bsf:a", "aac_adtstoasc",
                     *audio_meta,
+                    *sub_meta,
                     "-movflags", "+faststart",
                     str(output_path)
                 ]
@@ -1014,12 +1024,15 @@ class Downloader:
                     "ffmpeg", "-y",
                     "-threads", "0",
                     "-i", str(tmp_video_file),
+                    *sub_inputs,
                     "-map", "0:v:0",
                     "-map", "0:a:0?",
-                    *video_encoding_args,
+                    *sub_maps,
+                    "-c:v", "copy",
                     "-c:a", "copy",
                     "-bsf:a", "aac_adtstoasc",
                     *audio_meta,
+                    *sub_meta,
                     "-movflags", "+faststart",
                     str(output_path)
                 ]
