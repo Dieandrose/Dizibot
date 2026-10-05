@@ -54,11 +54,27 @@ ACTIVE_TASKS: Dict[int, asyncio.Task] = {}
 
 class DiziBotManager:
     def __init__(self):
+        proxy_dict = None
+        if config.proxy:
+            from urllib.parse import urlparse
+            p = urlparse(config.proxy)
+            if p.hostname and p.port:
+                proxy_dict = {
+                    "scheme": p.scheme or "socks5",
+                    "hostname": p.hostname,
+                    "port": p.port
+                }
+                if p.username:
+                    proxy_dict["username"] = p.username
+                if p.password:
+                    proxy_dict["password"] = p.password
+
         self.app = Client(
             name=config.session_name,
             api_id=config.api_id,
             api_hash=config.api_hash,
-            bot_token=config.bot_token
+            bot_token=config.bot_token,
+            proxy=proxy_dict
         )
         self._topic_lock = asyncio.Lock()
         self._register_handlers()
