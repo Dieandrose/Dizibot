@@ -40,6 +40,14 @@ try:
 except ImportError:
     pass
 
+try:
+    from tools.darkbox_sentinel import DarkBoxSentinel
+except ImportError:
+    try:
+        from Darkbox.tools.darkbox_sentinel import DarkBoxSentinel
+    except ImportError:
+        DarkBoxSentinel = None
+
 logger = logging.getLogger("DiziBot.Bot")
 
 # Bellek içi arama önbelleği (callback butonları için)
@@ -283,6 +291,7 @@ class DiziBotManager:
                     "🛡️ `/kontrol <Dizi>` ➔ Eksik bölümleri otomatik tamamla\n"
                     "📋 `/istekler` ➔ Bekleyen üye isteklerini yönet\n"
                     "📌 `/konular` | `/konubagla <Dizi>` ➔ Forum konularını yönet\n"
+                    "🛡️ `/sentinel` ➔ DarkBox Eklenti Sağlık, Domain, Afiş & Stream Denetimi\n"
                 )
 
             start_markup = InlineKeyboardMarkup([
@@ -714,6 +723,86 @@ class DiziBotManager:
                     await self.app.send_message(chat_id=adm_id, text=admin_msg, reply_markup=admin_btn)
                 except Exception:
                     pass
+
+        # 10. DarkBox Sentinel & Eklenti Koruyucu Komutları
+        @self.app.on_message(filters.command(["sentinel", "oto_tara", "doktor", "guardian"]))
+        async def cmd_sentinel(client: Client, message: Message):
+            u_id = message.from_user.id if message.from_user else 0
+            if u_id not in config.admin_ids:
+                await message.reply_text("⚠️ Bu komut sadece DarkBox yöneticileri içindir.")
+                return
+
+            sentinel_inst = DarkBoxSentinel() if DarkBoxSentinel else None
+            if not sentinel_inst:
+                await message.reply_text("❌ Sentinel motoru yüklenemedi.")
+                return
+
+            args = message.text.split(maxsplit=1)
+            if len(args) > 1 and args[1].strip():
+                p_name = args[1].strip()
+                status_msg = await message.reply_text(f"🔍 **{p_name}** eklentisi baştan sona denetleniyor...")
+                rep = await sentinel_inst.audit_plugin(p_name, auto_fix=False)
+                
+                d_stat = rep.domain_result.status if rep.domain_result else "Bilinmiyor"
+                d_url = rep.domain_result.current_url if rep.domain_result else "Tanımsız"
+                d_lat = rep.domain_result.latency_ms if rep.domain_result else 0.0
+                
+                p_broken = sum(1 for p in rep.poster_results if not p.valid)
+                p_tot = len(rep.poster_results)
+                
+                s_ok = "✅ Başarılı (HLS/MP4)" if (rep.stream_result and rep.stream_result.playable) else "❌ Çözülemedi"
+                s_dur = f"{rep.stream_result.load_time_ms} ms" if rep.stream_result else "0 ms"
+                audio_str = ", ".join(rep.stream_result.audio_tracks) if (rep.stream_result and rep.stream_result.audio_tracks) else "Belirsiz"
+                tr_dub = "🇹🇷 Var" if (rep.stream_result and rep.stream_result.has_turkish_audio) else "❌ Yok"
+                sub_str = "💬 Var" if (rep.stream_result and rep.stream_result.has_subtitles) else "❌ Yok"
+
+                res_text = (
+                    f"🛡️ **DarkBox Sentinel Denetim Raporu**\n\n"
+                    f"📦 **Eklenti:** `{p_name}`\n"
+                    f"📊 **Genel Sağlık:** `{'🟢 ' + rep.overall_health if rep.overall_health == 'OK' else '🟡 ' + rep.overall_health}`\n"
+                    f"⚡ **Hız Seviyesi:** `{rep.latency_score}`\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🌐 **Domain:** `{d_url}`\n"
+                    f"• Durum: `{d_stat}` ({d_lat} ms)\n"
+                    f"🖼️ **Afiş Sağlığı:** `{p_tot - p_broken}/{p_tot} Aktif` ({p_broken} Kırık/Hotlink)\n"
+                    f"🎬 **Player & Stream:** `{s_ok}` ({s_dur})\n"
+                    f"• Ses Kanalları: `{audio_str}`\n"
+                    f"• Türkçe Dublaj: `{tr_dub}` | Altyazı: `{sub_str}`\n"
+                    f"📝 **Teşhis & Özet:** `{rep.summary}`\n"
+                )
+
+                btn = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("🔄 Tekrar Test Et", callback_data=f"sentinel_p:{p_name}"),
+                        InlineKeyboardButton("🌐 Domain Güncelle", callback_data=f"sentinel_dfix:{p_name}")
+                    ],
+                    [InlineKeyboardButton("🔙 Sentinel Ana Menü", callback_data="sentinel_menu")]
+                ])
+                await status_msg.edit_text(res_text, reply_markup=btn, disable_web_page_preview=True)
+                return
+
+            all_plugins = sentinel_inst.get_all_plugin_names()
+            menu_text = (
+                f"🛡️ **DarkBox Sentinel & Plugin Guardian**\n\n"
+                f"DarkBox bünyesindeki **{len(all_plugins)} adet eklentinin** domain sağlıklarını, afişlerini, "
+                f"oynatıcı ve stream akışlarını, ses/altyazı kanallarını ve gecikme sürelerini otonom olarak denetleyin.\n\n"
+                f"👇 **Lütfen gerçekleştirmek istediğiniz işlemi seçin:**"
+            )
+
+            menu_btn = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🛡️ Tam Otomatik Genel Tarama", callback_data="sentinel_scan_all")],
+                [
+                    InlineKeyboardButton("🌐 Domainleri Tara & Düzelt", callback_data="sentinel_domains_fix"),
+                    InlineKeyboardButton("🖼️ Afiş Sağlığı Denetimi", callback_data="sentinel_posters")
+                ],
+                [
+                    InlineKeyboardButton("🎬 Canlı Stream & Player Testi", callback_data="sentinel_streams"),
+                    InlineKeyboardButton("⚡ Hız & Gecikme Benchmarkı", callback_data="sentinel_speed")
+                ],
+                [InlineKeyboardButton("🔄 Durumu Yenile", callback_data="sentinel_menu")]
+            ])
+
+            await message.reply_text(menu_text, reply_markup=menu_btn)
 
         # Callback Handlers (Buton Tıklamaları)
         @self.app.on_callback_query()
@@ -1215,6 +1304,157 @@ class DiziBotManager:
                 text, markup = self.get_system_status_report(user_id=user_id)
                 try:
                     await query.edit_message_text(text, reply_markup=markup)
+                except Exception:
+                    pass
+
+            # 10. DarkBox Sentinel Callback İşlemleri
+            elif data == "sentinel_menu":
+                if not is_admin:
+                    await query.answer("⚠️ Sadece yöneticiler içindir.", show_alert=True)
+                    return
+                sentinel_inst = DarkBoxSentinel() if DarkBoxSentinel else None
+                all_plugins = sentinel_inst.get_all_plugin_names() if sentinel_inst else []
+                menu_text = (
+                    f"🛡️ **DarkBox Sentinel & Plugin Guardian**\n\n"
+                    f"DarkBox bünyesindeki **{len(all_plugins)} adet eklentinin** domain sağlıklarını, afişlerini, "
+                    f"oynatıcı ve stream akışlarını, ses/altyazı kanallarını ve gecikme sürelerini otonom olarak denetleyin.\n\n"
+                    f"👇 **Lütfen gerçekleştirmek istediğiniz işlemi seçin:**"
+                )
+                menu_btn = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🛡️ Tam Otomatik Genel Tarama", callback_data="sentinel_scan_all")],
+                    [
+                        InlineKeyboardButton("🌐 Domainleri Tara & Düzelt", callback_data="sentinel_domains_fix"),
+                        InlineKeyboardButton("🖼️ Afiş Sağlığı Denetimi", callback_data="sentinel_posters")
+                    ],
+                    [
+                        InlineKeyboardButton("🎬 Canlı Stream & Player Testi", callback_data="sentinel_streams"),
+                        InlineKeyboardButton("⚡ Hız & Gecikme Benchmarkı", callback_data="sentinel_speed")
+                    ],
+                    [InlineKeyboardButton("🔄 Durumu Yenile", callback_data="sentinel_menu")]
+                ])
+                try:
+                    await query.edit_message_text(menu_text, reply_markup=menu_btn)
+                except Exception:
+                    pass
+
+            elif data == "sentinel_scan_all":
+                if not is_admin:
+                    await query.answer("⚠️ Sadece yöneticiler içindir.", show_alert=True)
+                    return
+                sentinel_inst = DarkBoxSentinel() if DarkBoxSentinel else None
+                if not sentinel_inst:
+                    await query.answer("❌ Sentinel motoru bulunamadı.", show_alert=True)
+                    return
+                try:
+                    await query.edit_message_text("⏳ **Tüm eklentiler baştan sona taranıyor...**\nDomain, Afiş, Player ve Hız testleri yapılıyor...")
+                except Exception:
+                    pass
+                reports = await sentinel_inst.audit_all_plugins(auto_fix=True)
+                
+                total = len(reports)
+                ok_count = sum(1 for r in reports if r.overall_health == "OK")
+                warn_count = sum(1 for r in reports if r.overall_health == "WARNING")
+                crit_count = sum(1 for r in reports if r.overall_health == "CRITICAL")
+                
+                lines = [
+                    f"🛡️ **DarkBox Genel Eklenti Sağlık Raporu**",
+                    f"📊 Toplam: `{total}` | 🟢 Aktif: `{ok_count}` | 🟡 Uyarı: `{warn_count}` | 🔴 Kritik: `{crit_count}`\n",
+                    "━━━━━━━━━━━━━━━━━━━━━━"
+                ]
+                for r in reports[:15]:
+                    icon = "🟢" if r.overall_health == "OK" else ("🟡" if r.overall_health == "WARNING" else "🔴")
+                    d_stat = r.domain_result.status if r.domain_result else "?"
+                    lat = f"{r.domain_result.latency_ms:.0f}ms" if r.domain_result else ""
+                    lines.append(f"{icon} **{r.plugin}** ➔ `{d_stat}` · {lat} · {r.summary}")
+
+                if total > 15:
+                    lines.append(f"\n*...ve {total - 15} eklenti daha kontrol edildi.*")
+
+                btn = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🌐 Domainleri Onar", callback_data="sentinel_domains_fix"), InlineKeyboardButton("⚡ Hız Testi", callback_data="sentinel_speed")],
+                    [InlineKeyboardButton("🔙 Sentinel Ana Menü", callback_data="sentinel_menu")]
+                ])
+                try:
+                    await query.edit_message_text("\n".join(lines), reply_markup=btn, disable_web_page_preview=True)
+                except Exception:
+                    pass
+
+            elif data == "sentinel_domains_fix":
+                if not is_admin:
+                    await query.answer("⚠️ Sadece yöneticiler içindir.", show_alert=True)
+                    return
+                sentinel_inst = DarkBoxSentinel() if DarkBoxSentinel else None
+                if not sentinel_inst:
+                    return
+                try:
+                    await query.edit_message_text("⏳ **Tüm eklenti domainleri test ediliyor ve değişenler güncelleniyor...**")
+                except Exception:
+                    pass
+                names = sentinel_inst.get_all_plugin_names()
+                updated_list = []
+                offline_list = []
+                for p in names:
+                    d = await sentinel_inst.check_domain(p, auto_update=True)
+                    if d.changed and d.applied_update:
+                        updated_list.append(f"• **{p}:** `{d.current_url}` ➔ `{d.final_url}`")
+                    elif d.status == "offline":
+                        offline_list.append(f"• **{p}:** `{d.current_url}` (Çevrimdışı)")
+
+                res_lines = ["🌐 **Domain Sağlığı & Güncelleme Raporu:**\n"]
+                if updated_list:
+                    res_lines.append("✅ **Otomatik Güncellenen Domainler:**")
+                    res_lines.extend(updated_list)
+                    res_lines.append("")
+                else:
+                    res_lines.append("🎉 Tüm eklenti domainleri güncel, değişiklik yok.\n")
+
+                if offline_list:
+                    res_lines.append("⚠️ **Erişilemeyen Domainler:**")
+                    res_lines.extend(offline_list[:8])
+
+                btn = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Sentinel Ana Menü", callback_data="sentinel_menu")]
+                ])
+                try:
+                    await query.edit_message_text("\n".join(res_lines), reply_markup=btn, disable_web_page_preview=True)
+                except Exception:
+                    pass
+
+            elif data == "sentinel_speed":
+                if not is_admin:
+                    await query.answer("⚠️ Sadece yöneticiler içindir.", show_alert=True)
+                    return
+                sentinel_inst = DarkBoxSentinel() if DarkBoxSentinel else None
+                if not sentinel_inst:
+                    return
+                try:
+                    await query.edit_message_text("⚡ **Tüm eklentilerin yanıt süreleri (ms) ölçülüyor...**")
+                except Exception:
+                    pass
+                names = sentinel_inst.get_all_plugin_names()
+                benchmarks = []
+                for p in names:
+                    d = await sentinel_inst.check_domain(p, auto_update=False)
+                    if d.http_status and d.latency_ms > 0:
+                        benchmarks.append((p, d.latency_ms, d.via_warp))
+
+                benchmarks.sort(key=lambda x: x[1])
+                lines = ["⚡ **DarkBox Eklenti Hız & Yanıt Süresi Sıralaması:**\n"]
+                lines.append("🚀 **En Hızlı Eklentiler:**")
+                for p, lat, warp in benchmarks[:7]:
+                    w_tag = " (WARP)" if warp else ""
+                    lines.append(f"• **{p}:** `{lat:.1f} ms`{w_tag}")
+
+                if len(benchmarks) > 7:
+                    lines.append("\n🐢 **En Yavaş / Gecikmeli Eklentiler:**")
+                    for p, lat, warp in benchmarks[-5:]:
+                        lines.append(f"• **{p}:** `{lat:.1f} ms`")
+
+                btn = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Sentinel Ana Menü", callback_data="sentinel_menu")]
+                ])
+                try:
+                    await query.edit_message_text("\n".join(lines), reply_markup=btn)
                 except Exception:
                     pass
 
