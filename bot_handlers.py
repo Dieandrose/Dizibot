@@ -1343,7 +1343,7 @@ class DiziBotManager:
                     pass
                 prompt_text = (
                     "🔍 **İçerik Arama:**\n\n"
-                    "Lütfen aramak istediğiniz dizi veya film adını yazıp gönderin.\n\n"
+                    "Lütfen aramak istediğiniz dizi veya film adını yazın.\n\n"
                     "• *Örnek:* `/ara Suits` veya doğrudan `Suits`"
                 )
                 try:
@@ -1352,26 +1352,6 @@ class DiziBotManager:
                         text=prompt_text,
                         reply_markup=ForceReply(selective=True, placeholder="/ara Suits...")
                     )
-                except Exception:
-                    pass
-
-            elif data.startswith("quick_q:"):
-                q_term = data.split(":", 1)[1]
-                try:
-                    await query.edit_message_text(f"🔍 **'{q_term}'** tüm eklentilerde aranıyor...")
-                except Exception:
-                    pass
-                results = await Downloader.search_all_plugins(q_term)
-                SEARCH_CACHE[str(user_id)] = results
-                if not results:
-                    try:
-                        await query.edit_message_text(f"❌ **'{q_term}'** için hiçbir kaynakta içerik bulunamadı.")
-                    except Exception:
-                        pass
-                    return
-                text, markup = self.render_search_keyboard(results, page=0, query_title=q_term)
-                try:
-                    await query.edit_message_text(text, reply_markup=markup)
                 except Exception:
                     pass
 
