@@ -239,11 +239,14 @@ class DiziBotManager:
                             thumb_url=thumb_url,
                             input_message_content=InputTextMessageContent(
                                 f"🎬 **{title}**\n\n"
-                                f"🌐 **Daha Fazlası İçin :**  izle.darkbox.com.tr:9443"
+                                f"• 🌐 **Kaynak:** `{plugin}`\n"
+                                f"• 📥 **Botta İndirmek & Sezonları Görmek İçin:**\n`/ara {title}`\n\n"
+                                f"• ✍️ **İstek Bildirmek İçin:**\n`/istek {title}`\n\n"
+                                f"🌐 **Web'de Doğrudan İzle:** [DarkBox Web]({config.website_url})"
                             ),
                             reply_markup=InlineKeyboardMarkup([
-                                [InlineKeyboardButton("🔍 Sezon & Bölümleri Listele", switch_inline_query_current_chat=title)],
-                                [InlineKeyboardButton("🌐 Daha Fazlası İçin", url="https://izle.darkbox.com.tr:9443")]
+                                [InlineKeyboardButton(f"🔍 '{title[:22]}' Sezonları Aç", switch_inline_query_current_chat=title)],
+                                [InlineKeyboardButton("🌐 Web'de İzle", url=config.website_url)]
                             ])
                         )
                     )
