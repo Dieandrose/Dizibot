@@ -1310,29 +1310,19 @@ class DiziBotManager:
                 except Exception:
                     pass
 
-            # 9.1 Hızlı Arama Rehberi & Örnek Butonlar
+            # 9.1 Hızlı Arama Rehberi
             elif data == "btn_quick_search":
                 q_text = (
                     "🔍 **İçerik Arama Nasıl Yapılır?**\n\n"
                     "Aramak istediğiniz dizi veya film adının başına `/ara` yazıp sohbete gönderin:\n\n"
-                    "👉 `/ara Suits`\n"
-                    "👉 `/ara Breaking Bad`\n"
-                    "👉 `/ara Spider-Man`\n"
-                    "👉 `/ara Mezarlık`\n\n"
-                    "💡 *Veya aşağıdaki hazır örneklerden birine basarak anında arayabilirsiniz:*"
+                    "• `/ara Suits`\n"
+                    "• `/ara Breaking Bad`\n"
+                    "• `/ara Spider-Man`\n"
+                    "• `/ara Kurtlar Vadisi`\n\n"
+                    "💡 *Örnek komutlardan birine dokunarak veya aramak istediğiniz ismi yazarak arama yapabilirsiniz.*"
                 )
                 q_btn = InlineKeyboardMarkup([
-                    [
-                        InlineKeyboardButton("🎬 Suits", callback_data="quick_q:Suits"),
-                        InlineKeyboardButton("🎬 Breaking Bad", callback_data="quick_q:Breaking Bad")
-                    ],
-                    [
-                        InlineKeyboardButton("🎬 Spider-Man", callback_data="quick_q:Spider-Man"),
-                        InlineKeyboardButton("🎬 Mezarlık", callback_data="quick_q:Mezarlık")
-                    ],
-                    [
-                        InlineKeyboardButton("🔙 Ana Menü", callback_data="btn_main_menu")
-                    ]
+                    [InlineKeyboardButton("🔙 Ana Menü", callback_data="btn_main_menu")]
                 ])
                 try:
                     await query.edit_message_text(q_text, reply_markup=q_btn)
