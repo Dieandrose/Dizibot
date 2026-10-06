@@ -1292,11 +1292,24 @@ class DiziBotManager:
                 p_bar = "▓" * int(pct_f * 10) + "░" * (10 - int(pct_f * 10))
                 cur_seg = t_info.get("current_seg", 0)
                 tot_seg = t_info.get("total_seg", 0)
-                
+                cur_mb = float(t_info.get("cur_mb") or 0.0)
+                tot_mb = float(t_info.get("tot_mb") or 0.0)
+                speed = float(t_info.get("speed_mb") or 0.0)
+                p_src = t_info.get("plugin") or j.get("plugin_name") or ""
+
+                size_str = f" ({cur_mb:.1f} MB / ~{tot_mb:.1f} MB)" if cur_mb > 0 else ""
+                rem_sec = int((tot_mb - cur_mb) / max(0.1, speed)) if (speed > 0 and tot_mb > cur_mb) else 0
+                time_str = f" | Kalan: `⏳ ~{rem_sec} sn`" if rem_sec > 0 else ""
+                speed_str = f"• Hız: `⚡ {speed:.1f} MB/s`{time_str}\n" if speed > 0 else ""
+                src_str = f"• Kaynak: `🌐 {p_src}`\n" if p_src else ""
+
                 text += (
                     f"🎬 **{disp_title}**\n"
                     f"• Aşama: 📥 `KAYNAKTAN İNDİRİLİYOR` (HLS)\n"
-                    f"• İlerleme: `[{p_bar}] %{pct}` ({cur_seg}/{tot_seg} Parça)\n"
+                    f"• İlerleme: `[{p_bar}] %{pct}`{size_str}\n"
+                    f"• Parça: `📦 {cur_seg}/{tot_seg} Segment`\n"
+                    f"{speed_str}"
+                    f"{src_str}"
                     f"• İşlem ID: `#{job_id}`\n\n"
                 )
                 live_shown += 1
@@ -1449,15 +1462,19 @@ class DiziBotManager:
                 safe_title = re.sub(r'[^a-zA-Z0-9_\-]', '_', clean_title)
                 temp_file = TEMP_DIR / f"job_{job_id}_{safe_title}_{'movie' if is_movie else f'S{season}E{episode}'}.mp4"
                 
-                def prog_cb(pct: float, done_seg: int = 0, tot_seg: int = 0, phase: str = "downloading"):
+                def prog_cb(pct: float, done_seg: int = 0, tot_seg: int = 0, cur_mb: float = 0.0, tot_mb: float = 0.0, speed_mb: float = 0.0, phase: str = "downloading"):
                     if db.is_job_cancelled(job_id):
                         raise asyncio.CancelledError(f"İşlem #{job_id} iptal edildi")
                     LIVE_TRANSFERS[job_id] = {
                         "title": disp_title,
+                        "plugin": p_name,
                         "phase": phase,
                         "progress": pct,
                         "current_seg": done_seg,
                         "total_seg": tot_seg,
+                        "cur_mb": cur_mb,
+                        "tot_mb": tot_mb,
+                        "speed_mb": speed_mb,
                         "updated_at": time.time()
                     }
                     db.update_queue_progress(job_id, "downloading", 0.73 if phase == "muxing" else pct * 0.7)

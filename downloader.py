@@ -83,19 +83,16 @@ class Downloader:
 
     @classmethod
     def calculate_relevance(cls, query: str, title: str) -> float:
-        """Arama sorgusu ile içerik başlığı arasındaki alaka skorunu (0-100) hesaplar."""
+        """Arama sorgusu ile içerik başlığı arasındaki alaka skorunu (0-100) hesaplar. Türkçe/İngilizce çift isimleri destekler."""
         tr_map = str.maketrans("çğıöşüâîûÇĞİÖŞÜÂÎÛ", "cgiosuaiuCGIOSUAIU")
 
         def _norm(s: str) -> str:
             if not s:
                 return ""
             s = s.lower().strip()
-            # Parantez/Köşeli parantez içlerini temizle: (2024), [DizipalX], (Türkçe Dublaj) vb.
-            s = re.sub(r'[\(\[\{].*?[\)\]\}]', ' ', s)
             s = s.translate(tr_map)
+            s = re.sub(r'[\(\[\{].*?[\)\]\}]', ' ', s)
             s = re.sub(r'^(the|a|an|el|la|le|der|die|das)\s+', '', s)
-            
-            # Gürültü kelimeleri ve ekleri temizle
             noise = [
                 'turkce dublaj', 'türkçe dublaj', 'turkce altyazili', 'türkçe altyazılı',
                 'altyazili', 'altyazılı', 'dublaj', 'full hd izle', 'hd izle', 'full hd',
@@ -105,53 +102,47 @@ class Downloader:
             ]
             for n in sorted(noise, key=len, reverse=True):
                 s = re.sub(rf'\b{n}\b', ' ', s)
-
             s = re.sub(r"[^\w\s]", " ", s)
             return " ".join(s.split())
 
-        q_clean = _norm(query)
-        t_clean = _norm(title)
+        def _extract_variants(text: str) -> list[str]:
+            variants = [text]
+            for m in re.finditer(r'[\(\[](.*?)[\)\]]', text):
+                sub = m.group(1).strip()
+                if len(sub) >= 3 and not sub.isdigit():
+                    variants.append(sub)
+            main_part = re.sub(r'[\(\[].*?[\)\]]', '', text).strip()
+            if main_part and main_part != text:
+                variants.append(main_part)
+            return list(dict.fromkeys(variants))
 
-        if not q_clean or not t_clean:
-            return 0.0
+        q_vars = _extract_variants(query)
+        t_vars = _extract_variants(title)
 
-        if q_clean == t_clean:
-            return 100.0
+        best_score = 0.0
+        for q_v in q_vars:
+            for t_v in t_vars:
+                q_c = _norm(q_v)
+                t_c = _norm(t_v)
+                if not q_c or not t_c:
+                    continue
+                if q_c == t_c:
+                    return 100.0
+                q_w = q_c.split()
+                t_w = t_c.split()
+                if q_w == t_w:
+                    return 100.0
+                if t_c.startswith(q_c) or q_c.startswith(t_c):
+                    score = 92.0
+                elif all(w in t_w for w in q_w) or all(w in q_w for w in t_w):
+                    score = 85.0
+                else:
+                    seq_ratio = difflib.SequenceMatcher(None, q_c, t_c).ratio()
+                    score = seq_ratio * 100.0 if seq_ratio >= 0.75 else 0.0
+                if score > best_score:
+                    best_score = score
 
-        q_words = q_clean.split()
-        t_words = t_clean.split()
-
-        # Tam kelime eşleşmesi
-        if q_words == t_words:
-            return 100.0
-
-        # Başlık tam olarak sorgu ile başlıyorsa
-        if t_clean.startswith(q_clean):
-            rest = t_clean[len(q_clean):].strip()
-            if not rest or rest.isdigit():
-                return 98.0
-            rest_words = rest.split()
-            # Başlıkta ek kelimeler varsa (örn: "Lost in Space", "Suits LA") farklı içeriktir
-            return max(30.0, 75.0 - (len(rest_words) * 15.0))
-
-        # Sorgu başlıkla başlıyorsa
-        if q_clean.startswith(t_clean):
-            rest = q_clean[len(t_clean):].strip()
-            if not rest or rest.isdigit():
-                return 95.0
-            return 60.0
-
-        # Tüm sorgu kelimeleri başlıkta mevcut mu?
-        if all(w in t_words for w in q_words):
-            extra = len(t_words) - len(q_words)
-            return max(40.0, 85.0 - (extra * 15.0))
-
-        # Benzerlik oranı (Fuzzy match)
-        seq_ratio = difflib.SequenceMatcher(None, q_clean, t_clean).ratio()
-        if seq_ratio >= 0.8:
-            return seq_ratio * 100.0
-
-        return 0.0
+        return best_score
 
     @classmethod
     def get_all_plugin_names(cls) -> List[str]:
@@ -185,12 +176,22 @@ class Downloader:
     async def search_all_plugins(cls, query: str) -> List[Dict[str, Any]]:
         """DarkBox eklentilerinde kontrollü, hızlı ve bellek korumalı paralel arama yapar."""
         plugins = cls.get_all_plugin_names()
-        sem = asyncio.Semaphore(35)
-        
-        async def _search_plugin(p: str):
+        sem = asyncio.Semaphore(40)
+
+        # Sorgu varyantları oluştur (Örn: "Örümcek-Adam: Yepyeni Bir Gün (Spider-Man: Brand New Day)" -> ["Örümcek-Adam: Yepyeni Bir Gün", "Spider-Man: Brand New Day"])
+        queries_to_search = [query]
+        for m in re.finditer(r'[\(\[](.*?)[\)\]]', query):
+            sub = m.group(1).strip()
+            if len(sub) >= 3 and not sub.isdigit() and sub not in queries_to_search:
+                queries_to_search.append(sub)
+        main_part = re.sub(r'[\(\[].*?[\)\]]', '', query).strip()
+        if main_part and main_part not in queries_to_search:
+            queries_to_search.append(main_part)
+
+        async def _search_plugin_q(p: str, q_term: str):
             async with sem:
                 try:
-                    res = await asyncio.wait_for(local_search(p, query), timeout=6.0)
+                    res = await asyncio.wait_for(local_search(p, q_term), timeout=6.0)
                     out = []
                     for item in res:
                         title = item.get("title") if isinstance(item, dict) else (item.title if hasattr(item, "title") else str(item))
@@ -210,8 +211,12 @@ class Downloader:
                     logger.debug(f"Plugin {p} search error: {e}")
                     return []
 
-        tasks = [asyncio.create_task(_search_plugin(p)) for p in plugins]
-        done, pending = await asyncio.wait(tasks, timeout=8.5)
+        tasks = []
+        for p in plugins:
+            for q_term in queries_to_search:
+                tasks.append(asyncio.create_task(_search_plugin_q(p, q_term)))
+
+        done, pending = await asyncio.wait(tasks, timeout=9.0)
         for t in pending:
             t.cancel()
             
@@ -826,6 +831,8 @@ class Downloader:
 
             tot_all_chunks = len(video_segs) + len(audio_tr_segs)
             done_all_chunks = 0
+            downloaded_bytes = 0
+            start_dl_time = time.time()
 
             async def download_seg_list(
                 seg_list: List[str], 
@@ -839,7 +846,7 @@ class Downloader:
                     return
 
                 sem = asyncio.Semaphore(25 if is_video else 50)
-                nonlocal done_all_chunks
+                nonlocal done_all_chunks, downloaded_bytes
                 last_working_netloc = None
 
                 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -874,7 +881,7 @@ class Downloader:
                         return b""
 
                 async def fetch_seg(idx: int, s_url: str):
-                    nonlocal done_all_chunks, last_working_netloc
+                    nonlocal done_all_chunks, downloaded_bytes, last_working_netloc
                     orig_parsed = urllib.parse.urlparse(s_url)
                     async with sem:
                         for retry in range(12):
@@ -887,6 +894,7 @@ class Downloader:
                                 res = await session.get(url_to_try, headers=headers, timeout=15.0)
                                 if res.status_code == 200 and is_valid_chunk(res.content):
                                     done_all_chunks += 1
+                                    downloaded_bytes += len(res.content)
                                     last_working_netloc = orig_parsed.netloc if res.url == s_url else last_working_netloc
                                     chunk_data = res.content
                                     # AES-128 Şifre Çözme
@@ -899,11 +907,27 @@ class Downloader:
                                         except Exception as dec_err:
                                             logger.debug(f"Segment #{idx} AES çözme hatası: {dec_err}")
                                             
-                                    if progress_cb and tot_all_chunks > 0 and done_all_chunks % 15 == 0:
+                                    if progress_cb and tot_all_chunks > 0 and (done_all_chunks % 10 == 0 or done_all_chunks == tot_all_chunks):
+                                        elapsed = max(0.1, time.time() - start_dl_time)
+                                        cur_mb = downloaded_bytes / (1024 * 1024)
+                                        speed_mb = cur_mb / elapsed
+                                        frac = done_all_chunks / tot_all_chunks
+                                        tot_est_mb = cur_mb / max(0.01, frac)
                                         try:
-                                            progress_cb(done_all_chunks / tot_all_chunks, done_all_chunks, tot_all_chunks)
+                                            progress_cb(
+                                                frac, 
+                                                done_seg=done_all_chunks, 
+                                                tot_seg=tot_all_chunks, 
+                                                cur_mb=cur_mb, 
+                                                tot_mb=tot_est_mb, 
+                                                speed_mb=speed_mb, 
+                                                phase="downloading"
+                                            )
                                         except TypeError:
-                                            progress_cb(done_all_chunks / tot_all_chunks)
+                                            try:
+                                                progress_cb(frac, done_all_chunks, tot_all_chunks)
+                                            except Exception:
+                                                progress_cb(frac)
                                     return idx, chunk_data
                                 else:
                                     await asyncio.sleep(0.3 + retry * 0.3)
