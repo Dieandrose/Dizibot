@@ -1458,6 +1458,129 @@ class DiziBotManager:
                 except Exception:
                     pass
 
+            elif data == "sentinel_posters":
+                if not is_admin:
+                    await query.answer("⚠️ Bu işlem sadece yöneticilere özeldir.", show_alert=True)
+                    return
+                sentinel_inst = DarkBoxSentinel() if DarkBoxSentinel else None
+                if not sentinel_inst:
+                    return
+                try:
+                    await query.edit_message_text("🖼️ **Eklentilerin afiş ve görsel bağlantıları taranıyor...**")
+                except Exception:
+                    pass
+                names = sentinel_inst.get_all_plugin_names()
+                broken_list = []
+                for p in names[:12]:
+                    p_res = await sentinel_inst.check_posters(p, sample_count=2)
+                    bad = [x for x in p_res if not x.valid]
+                    if bad:
+                        broken_list.append(f"• **{p}:** `{bad[0].error or 'Kırık link'}`")
+
+                res_lines = ["🖼️ **Afiş Sağlığı Denetim Raporu:**\n"]
+                if broken_list:
+                    res_lines.append("⚠️ **Afiş / Hotlink Sorunu Olan Eklentiler:**")
+                    res_lines.extend(broken_list)
+                else:
+                    res_lines.append("🎉 Test edilen tüm eklenti afişleri sorunsuz ve aktif.")
+
+                btn = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Sentinel Ana Menü", callback_data="sentinel_menu")]])
+                try:
+                    await query.edit_message_text("\n".join(res_lines), reply_markup=btn, disable_web_page_preview=True)
+                except Exception:
+                    pass
+
+            elif data == "sentinel_streams":
+                if not is_admin:
+                    await query.answer("⚠️ Bu işlem sadece yöneticilere özeldir.", show_alert=True)
+                    return
+                sentinel_inst = DarkBoxSentinel() if DarkBoxSentinel else None
+                if not sentinel_inst:
+                    return
+                try:
+                    await query.edit_message_text("🎬 **Canlı rastgele içerik oynatma ve akış testleri yapılıyor...**")
+                except Exception:
+                    pass
+                names = sentinel_inst.get_all_plugin_names()
+                results = []
+                for p in names[:8]:
+                    s = await sentinel_inst.check_stream_playback(p)
+                    results.append(s)
+
+                lines = ["🎬 **Canlı Stream & Player Oynatma Raporu:**\n"]
+                for s in results:
+                    stat_emoji = "✅" if s.playable else "❌"
+                    tr_tag = " [TR Dub]" if s.has_turkish_audio else ""
+                    sub_tag = " [Altyazı]" if s.has_subtitles else ""
+                    lines.append(f"{stat_emoji} **{s.plugin}:** `{s.stream_type}` ({s.load_time_ms:.0f}ms){tr_tag}{sub_tag}")
+
+                btn = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Sentinel Ana Menü", callback_data="sentinel_menu")]])
+                try:
+                    await query.edit_message_text("\n".join(lines), reply_markup=btn, disable_web_page_preview=True)
+                except Exception:
+                    pass
+
+            elif data.startswith("sentinel_p:"):
+                if not is_admin:
+                    await query.answer("⚠️ Bu işlem sadece yöneticilere özeldir.", show_alert=True)
+                    return
+                p_name = data.split(":")[1]
+                sentinel_inst = DarkBoxSentinel() if DarkBoxSentinel else None
+                if not sentinel_inst:
+                    return
+                try:
+                    await query.edit_message_text(f"🔍 **{p_name}** eklentisi yeniden denetleniyor...")
+                except Exception:
+                    pass
+                rep = await sentinel_inst.audit_plugin(p_name, auto_fix=False)
+                d_stat = rep.domain_result.status if rep.domain_result else "Bilinmiyor"
+                d_url = rep.domain_result.current_url if rep.domain_result else "Tanımsız"
+                d_lat = rep.domain_result.latency_ms if rep.domain_result else 0.0
+                p_broken = sum(1 for p in rep.poster_results if not p.valid)
+                p_tot = len(rep.poster_results)
+                s_ok = "✅ Başarılı" if (rep.stream_result and rep.stream_result.playable) else "❌ Çözülemedi"
+                s_dur = f"{rep.stream_result.load_time_ms} ms" if rep.stream_result else "0 ms"
+                audio_str = ", ".join(rep.stream_result.audio_tracks) if (rep.stream_result and rep.stream_result.audio_tracks) else "Belirsiz"
+                tr_dub = "🇹🇷 Var" if (rep.stream_result and rep.stream_result.has_turkish_audio) else "❌ Yok"
+                sub_str = "💬 Var" if (rep.stream_result and rep.stream_result.has_subtitles) else "❌ Yok"
+
+                res_text = (
+                    f"🛡️ **DarkBox Sentinel Denetim Raporu**\n\n"
+                    f"📦 **Eklenti:** `{p_name}`\n"
+                    f"📊 **Genel Sağlık:** `{'🟢 ' + rep.overall_health if rep.overall_health == 'OK' else '🟡 ' + rep.overall_health}`\n"
+                    f"⚡ **Hız Seviyesi:** `{rep.latency_score}`\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🌐 **Domain:** `{d_url}`\n"
+                    f"• Durum: `{d_stat}` ({d_lat} ms)\n"
+                    f"🖼️ **Afiş Sağlığı:** `{p_tot - p_broken}/{p_tot} Aktif` ({p_broken} Kırık/Hotlink)\n"
+                    f"🎬 **Player & Stream:** `{s_ok}` ({s_dur})\n"
+                    f"• Ses: `{audio_str}` | TR Dublaj: `{tr_dub}`\n"
+                    f"• Altyazı: `{sub_str}`\n"
+                    f"📝 **Teşhis & Özet:** `{rep.summary}`\n"
+                )
+                btn = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Tekrar Test Et", callback_data=f"sentinel_p:{p_name}"), InlineKeyboardButton("🌐 Domain Güncelle", callback_data=f"sentinel_dfix:{p_name}")],
+                    [InlineKeyboardButton("🔙 Sentinel Ana Menü", callback_data="sentinel_menu")]
+                ])
+                try:
+                    await query.edit_message_text(res_text, reply_markup=btn, disable_web_page_preview=True)
+                except Exception:
+                    pass
+
+            elif data.startswith("sentinel_dfix:"):
+                if not is_admin:
+                    await query.answer("⚠️ Bu işlem sadece yöneticilere özeldir.", show_alert=True)
+                    return
+                p_name = data.split(":")[1]
+                sentinel_inst = DarkBoxSentinel() if DarkBoxSentinel else None
+                if not sentinel_inst:
+                    return
+                d = await sentinel_inst.check_domain(p_name, auto_update=True)
+                if d.applied_update:
+                    await query.answer(f"✅ {p_name} domaini {d.final_url} olarak güncellendi!", show_alert=True)
+                else:
+                    await query.answer(f"ℹ️ {p_name} domaini zaten güncel ({d.status}).", show_alert=True)
+
     def get_system_status_report(self, user_id: int = 0) -> Tuple[str, InlineKeyboardMarkup]:
         is_admin = (user_id in config.admin_ids)
         active_jobs = db.get_active_queue()
