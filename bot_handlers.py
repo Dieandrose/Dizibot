@@ -24,7 +24,8 @@ from pyrogram.types import (
     CallbackQuery,
     InlineQuery,
     InlineQueryResultArticle,
-    InputTextMessageContent
+    InputTextMessageContent,
+    ForceReply
 )
 
 from config import config, TEMP_DIR
@@ -807,6 +808,30 @@ class DiziBotManager:
 
             await message.reply_text(menu_text, reply_markup=menu_btn)
 
+        # 11. Özel Sohbet Doğrudan Metin / Arama Yakalayıcı
+        @self.app.on_message(filters.private & filters.text & ~filters.command(["start", "yardim", "help", "ara", "search", "indir", "download", "durum", "status", "kuyruk", "queue", "iptal", "cancel", "kuyruktemizle", "takip", "takiplistesi", "takipbirak", "konubagla", "konu", "settopic", "konular", "topics", "konusil", "deltopic", "istek", "kontrol", "dogrula", "check", "sentinel", "oto_tara", "doktor", "guardian"]))
+        async def handle_private_text_search(client: Client, message: Message):
+            text = (message.text or "").strip()
+            if not text or text.startswith("/"):
+                return
+            query = text
+            msg = await message.reply_text(f"🔍 **'{query}'** tüm DarkBox eklentilerinde aranıyor...")
+            try:
+                results = await Downloader.search_all_plugins(query)
+                user_id = str(message.from_user.id) if message.from_user else "0"
+                SEARCH_CACHE[user_id] = results
+                if not results:
+                    await msg.edit_text(f"❌ **'{query}'** için hiçbir kaynakta içerik bulunamadı.\n\nFarklı bir isim deneyebilir veya `/istek {query}` yazarak talep edebilirsiniz.")
+                    return
+                reply_text, markup = self.render_search_keyboard(results, page=0, query_title=query)
+                await msg.edit_text(reply_text, reply_markup=markup)
+            except Exception as e:
+                logger.error(f"Özel metin arama hatası: {e}")
+                try:
+                    await msg.edit_text(f"⚠️ Arama sırasında bir hata oluştu: {e}")
+                except Exception:
+                    pass
+
         # Callback Handlers (Buton Tıklamaları)
         @self.app.on_callback_query()
         async def handle_callbacks(client: Client, query: CallbackQuery):
@@ -1310,22 +1335,23 @@ class DiziBotManager:
                 except Exception:
                     pass
 
-            # 9.1 Hızlı Arama Rehberi
+            # 9.1 Hızlı Arama
             elif data == "btn_quick_search":
-                q_text = (
-                    "🔍 **İçerik Arama Nasıl Yapılır?**\n\n"
-                    "Aramak istediğiniz dizi veya film adının başına `/ara` yazıp sohbete gönderin:\n\n"
-                    "• `/ara Suits`\n"
-                    "• `/ara Breaking Bad`\n"
-                    "• `/ara Spider-Man`\n"
-                    "• `/ara Kurtlar Vadisi`\n\n"
-                    "💡 *Örnek komutlardan birine dokunarak veya aramak istediğiniz ismi yazarak arama yapabilirsiniz.*"
-                )
-                q_btn = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 Ana Menü", callback_data="btn_main_menu")]
-                ])
                 try:
-                    await query.edit_message_text(q_text, reply_markup=q_btn)
+                    await query.answer()
+                except Exception:
+                    pass
+                prompt_text = (
+                    "🔍 **İçerik Arama:**\n\n"
+                    "Lütfen aramak istediğiniz dizi veya film adını yazıp gönderin.\n\n"
+                    "• *Örnek:* `/ara Suits` veya doğrudan `Suits`"
+                )
+                try:
+                    await self.app.send_message(
+                        chat_id=user_id,
+                        text=prompt_text,
+                        reply_markup=ForceReply(selective=True, placeholder="/ara Suits...")
+                    )
                 except Exception:
                     pass
 
