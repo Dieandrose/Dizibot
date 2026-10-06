@@ -82,8 +82,8 @@ class Config:
         admin_raw = os.environ.get("ADMIN_IDS") or env_vars.get("ADMIN_IDS") or "1080169172"
         self.admin_ids = [int(a.strip()) for a in admin_raw.split(",") if a.strip().isdigit()]
 
-        self.proxy = os.environ.get("TG_UPLOADER_PROXY") or env_vars.get("TG_UPLOADER_PROXY") or "socks5://127.0.0.1:4000"
-        if self.proxy.startswith("http://127.0.0.1:4000") or self.proxy.startswith("http://localhost:4000"):
+        self.proxy = os.environ.get("TG_UPLOADER_PROXY") or env_vars.get("TG_UPLOADER_PROXY") or ""
+        if self.proxy and (self.proxy.startswith("http://127.0.0.1:4000") or self.proxy.startswith("http://localhost:4000")):
             self.proxy = self.proxy.replace("http://", "socks5://")
         self.invite_link = os.environ.get("TG_INVITE_LINK") or env_vars.get("TG_INVITE_LINK") or "https://t.me/+_gKDymkpjtZmMzg8"
         self.website_url = os.environ.get("WEB_SITE_URL") or env_vars.get("WEB_SITE_URL") or "https://izle.darkbox.com.tr:9443"
