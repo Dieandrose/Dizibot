@@ -40,6 +40,19 @@ from curl_cffi.requests import AsyncSession
 logger = logging.getLogger("DiziBot.Downloader")
 
 
+def safe_int_num(val, default=1) -> int:
+    """Metin veya sayısal sezon/bölüm değerlerini güvenli tamsayıya (int) çevirir."""
+    if isinstance(val, int):
+        return val
+    try:
+        m = re.search(r'\d+', str(val))
+        if m:
+            return int(m.group(0))
+        return int(val)
+    except Exception:
+        return default
+
+
 class Downloader:
     @staticmethod
     def parse_title_season_episode(raw_title: str, ep_title: str = "", ep_url: str = "") -> Tuple[str, int, int]:
@@ -326,8 +339,10 @@ class Downloader:
                 else:
                     # Dizi Durumu (Kesin Sezon / Bölüm Eşleştirme)
                     for ep in episodes:
-                        s_num = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
-                        e_num = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                        s_val = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
+                        e_val = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                        s_num = safe_int_num(s_val)
+                        e_num = safe_int_num(e_val)
                         ep_url = ep.get("url", "") if isinstance(ep, dict) else getattr(ep, "url", "")
                         ep_title = ep.get("title", "") if isinstance(ep, dict) else getattr(ep, "title", "")
 

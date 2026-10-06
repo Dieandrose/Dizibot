@@ -884,14 +884,25 @@ class DiziBotManager:
                 ))
 
                 if is_series:
-                    seasons = sorted(set(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1) for ep in episodes))
+                    seasons = []
+                    seen_seasons = set()
+                    for ep in episodes:
+                        s_raw = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
+                        if s_raw not in seen_seasons:
+                            seen_seasons.add(s_raw)
+                            seasons.append(s_raw)
+                    seasons.sort(key=lambda s: (safe_int_num(s), str(s)))
+
                     s_buttons = []
                     # En üste TÜM SEZONLARI İNDİR butonu
                     s_buttons.append([InlineKeyboardButton("🔥 TÜM SEZONLARI İNDİR (Tüm Bölümler)", callback_data=f"dl_all_series:{idx}")])
                     row = []
-                    for s in seasons:
-                        row.append(InlineKeyboardButton(f"{s}. Sezon", callback_data=f"sel_s:{idx}:{s}"))
-                        if len(row) == 3:
+                    for s_idx, s in enumerate(seasons):
+                        s_label = str(s)
+                        if not any(w in s_label.lower() for w in ["sezon", "dublaj", "altyazı", ".s"]):
+                            s_label = f"{s}. Sezon"
+                        row.append(InlineKeyboardButton(s_label, callback_data=f"sel_s:{idx}:{s_idx}"))
+                        if len(row) == 2:
                             s_buttons.append(row)
                             row = []
                     if row:
@@ -988,11 +999,11 @@ class DiziBotManager:
 
             # 2. Sezon Seçimi -> Bölümleri Getir
             elif data.startswith("sel_s:"):
-                _, idx_str, s_str = data.split(":")
-                idx, season = int(idx_str), int(s_str)
+                parts = data.split(":")
+                idx, s_idx = int(parts[1]), int(parts[2])
                 user_cache = SEARCH_CACHE.get(str(user_id), [])
                 if not user_cache or idx >= len(user_cache):
-                    await query.answer("⚠️ Süre aşımı.", show_alert=True)
+                    await query.answer("⚠️ Süre aşımı, lütfen tekrar arayın.", show_alert=True)
                     return
 
                 try:
@@ -1012,23 +1023,47 @@ class DiziBotManager:
                     logger.warning(f"Plugin {plugin} load_item hata: {load_err}")
 
                 episodes = (detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])) if detail else []
-                episodes.sort(key=lambda ep: (
-                    safe_int_num(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)),
-                    safe_int_num(ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1))
-                ))
+                
+                seasons = []
+                seen_seasons = set()
+                for ep in episodes:
+                    s_raw = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
+                    if s_raw not in seen_seasons:
+                        seen_seasons.add(s_raw)
+                        seasons.append(s_raw)
+                seasons.sort(key=lambda s: (safe_int_num(s), str(s)))
+
+                selected_season = seasons[s_idx] if s_idx < len(seasons) else (seasons[0] if seasons else 1)
+                s_num = safe_int_num(selected_season)
+
+                matching_eps = [
+                    ep for ep in episodes 
+                    if (ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)) == selected_season
+                    or (len(seasons) == 1 and safe_int_num(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)) == s_num)
+                ]
+                if not matching_eps:
+                    matching_eps = [
+                        ep for ep in episodes 
+                        if safe_int_num(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)) == s_num
+                    ]
+
+                matching_eps.sort(key=lambda ep: safe_int_num(ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)))
+
+                s_label = str(selected_season)
+                if not any(w in s_label.lower() for w in ["sezon", "dublaj", "altyazı", ".s"]):
+                    s_label = f"{s_num}. Sezon"
+
                 ep_buttons = []
                 # En üste SEÇİLİ SEZONU İNDİR butonu
-                ep_buttons.append([InlineKeyboardButton(f"📥 {season}. SEZONU İNDİR (Tüm Bölümler)", callback_data=f"dl_all_s:{idx}:{season}")])
+                ep_buttons.append([InlineKeyboardButton(f"📥 {s_label} İNDİR (Tüm Bölümler)", callback_data=f"dl_all_s:{idx}:{s_idx}")])
 
                 row = []
-                for ep in episodes:
-                    s_num = safe_int_num(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1))
+                for ep in matching_eps:
                     e_num = safe_int_num(ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1))
-                    if s_num == season:
-                        row.append(InlineKeyboardButton(f"{e_num}. Bölüm", callback_data=f"dl_ep:{idx}:{s_num}:{e_num}"))
-                        if len(row) == 4:
-                            ep_buttons.append(row)
-                            row = []
+                    row.append(InlineKeyboardButton(f"{e_num}. Bölüm", callback_data=f"dl_ep:{idx}:{s_num}:{e_num}"))
+                    if len(row) == 4:
+                        ep_buttons.append(row)
+                        row = []
                 if row:
                     ep_buttons.append(row)
 
@@ -1036,7 +1071,7 @@ class DiziBotManager:
                 ep_buttons.append([InlineKeyboardButton("🔙 Sezon Seçimine Dön", callback_data=f"sel_res:{idx}")])
 
                 await query.edit_message_text(
-                    f"🎬 **{title}** - **{season}. Sezon**\nSezonun tamamını tek tıkla indirebilir veya tekil bölüm seçebilirsiniz:",
+                    f"🎬 **{title}** - **{s_label}**\nSezonun tamamını tek tıkla indirebilir veya tekil bölüm seçebilirsiniz:",
                     reply_markup=InlineKeyboardMarkup(ep_buttons)
                 )
 
@@ -1089,8 +1124,8 @@ class DiziBotManager:
 
             # 4. Tüm Sezonu İndirme Tetikleme
             elif data.startswith("dl_all_s:"):
-                _, idx_str, s_str = data.split(":")
-                idx, s_num = int(idx_str), int(s_str)
+                parts = data.split(":")
+                idx, s_idx = int(parts[1]), int(parts[2])
                 user_cache = SEARCH_CACHE.get(str(user_id), [])
                 if not user_cache or idx >= len(user_cache):
                     await query.answer("⚠️ Süre aşımı.", show_alert=True)
@@ -1101,30 +1136,53 @@ class DiziBotManager:
                 plugin = selected_item.get("plugin_name", "")
                 url = selected_item.get("url", "")
 
-                if not is_admin:
-                    req_id = db.create_request(user_id=user_id, user_name=user_name, query=f"{title} {s_num}. Sezon")
-                    await query.answer("📩 İsteğiniz yöneticilere iletildi!", show_alert=True)
-                    await query.edit_message_text(f"📩 **{title} {s_num}. Sezon** indirme talebiniz yöneticilere iletildi! (İstek No: `#{req_id}`)\n👑 Yöneticiler onayladığında otomatik yüklenecektir.")
-                    await _notify_admins_for_request(req_id, f"{title} {s_num}. Sezon", user_id, user_name, plugin)
-                    return
-
                 detail = await local_load_item(plugin, url)
                 episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
-                episodes.sort(key=lambda ep: (
-                    safe_int_num(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)),
-                    safe_int_num(ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1))
-                ))
+                
+                seasons = []
+                seen_seasons = set()
+                for ep in episodes:
+                    s_raw = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
+                    if s_raw not in seen_seasons:
+                        seen_seasons.add(s_raw)
+                        seasons.append(s_raw)
+                seasons.sort(key=lambda s: (safe_int_num(s), str(s)))
+
+                selected_season = seasons[s_idx] if s_idx < len(seasons) else (seasons[0] if seasons else 1)
+                s_num = safe_int_num(selected_season)
+                s_label = str(selected_season)
+                if not any(w in s_label.lower() for w in ["sezon", "dublaj", "altyazı", ".s"]):
+                    s_label = f"{s_num}. Sezon"
+
+                if not is_admin:
+                    req_id = db.create_request(user_id=user_id, user_name=user_name, query=f"{title} {s_label}")
+                    await query.answer("📩 İsteğiniz yöneticilere iletildi!", show_alert=True)
+                    await query.edit_message_text(f"📩 **{title} {s_label}** indirme talebiniz yöneticilere iletildi! (İstek No: `#{req_id}`)\n👑 Yöneticiler onayladığında otomatik yüklenecektir.")
+                    await _notify_admins_for_request(req_id, f"{title} {s_label}", user_id, user_name, plugin)
+                    return
+
+                matching_eps = [
+                    ep for ep in episodes 
+                    if (ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)) == selected_season
+                    or (len(seasons) == 1 and safe_int_num(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)) == s_num)
+                ]
+                if not matching_eps:
+                    matching_eps = [
+                        ep for ep in episodes 
+                        if safe_int_num(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)) == s_num
+                    ]
+
+                matching_eps.sort(key=lambda ep: safe_int_num(ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)))
 
                 added = 0
-                for ep in episodes:
+                for ep in matching_eps:
                     s = safe_int_num(ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1))
                     e = safe_int_num(ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1))
-                    if s == s_num:
-                        db.add_to_queue(title=title, season=s, episode=e, plugin_name=plugin, item_url=url, priority=2, requested_by=user_id)
-                        added += 1
+                    db.add_to_queue(title=title, season=s, episode=e, plugin_name=plugin, item_url=url, priority=2, requested_by=user_id)
+                    added += 1
 
                 await query.answer(f"✅ {added} bölüm kuyruğa eklendi!")
-                await query.edit_message_text(f"✅ **{title} {s_num}. Sezonun** tüm bölümleri ({added} bölüm) kuyruğa alındı!")
+                await query.edit_message_text(f"✅ **{title} {s_label}** tüm bölümleri ({added} bölüm) kuyruğa alındı!")
                 asyncio.create_task(self.process_queue())
 
             # 5. Admin İstek Onayı
