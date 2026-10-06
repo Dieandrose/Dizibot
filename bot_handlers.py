@@ -299,7 +299,7 @@ class DiziBotManager:
 
             start_markup = InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("🔍 Hızlı İçerik Ara", switch_inline_query_current_chat=""),
+                    InlineKeyboardButton("🔍 Hızlı İçerik Ara", callback_data="btn_quick_search"),
                     InlineKeyboardButton("📊 Canlı Durum", callback_data="status_ref")
                 ],
                 [
@@ -1307,6 +1307,98 @@ class DiziBotManager:
                 text, markup = self.get_system_status_report(user_id=user_id)
                 try:
                     await query.edit_message_text(text, reply_markup=markup)
+                except Exception:
+                    pass
+
+            # 9.1 Hızlı Arama Rehberi & Örnek Butonlar
+            elif data == "btn_quick_search":
+                q_text = (
+                    "🔍 **İçerik Arama Nasıl Yapılır?**\n\n"
+                    "Aramak istediğiniz dizi veya film adının başına `/ara` yazıp sohbete gönderin:\n\n"
+                    "👉 `/ara Suits`\n"
+                    "👉 `/ara Breaking Bad`\n"
+                    "👉 `/ara Spider-Man`\n"
+                    "👉 `/ara Mezarlık`\n\n"
+                    "💡 *Veya aşağıdaki hazır örneklerden birine basarak anında arayabilirsiniz:*"
+                )
+                q_btn = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("🎬 Suits", callback_data="quick_q:Suits"),
+                        InlineKeyboardButton("🎬 Breaking Bad", callback_data="quick_q:Breaking Bad")
+                    ],
+                    [
+                        InlineKeyboardButton("🎬 Spider-Man", callback_data="quick_q:Spider-Man"),
+                        InlineKeyboardButton("🎬 Mezarlık", callback_data="quick_q:Mezarlık")
+                    ],
+                    [
+                        InlineKeyboardButton("🔙 Ana Menü", callback_data="btn_main_menu")
+                    ]
+                ])
+                try:
+                    await query.edit_message_text(q_text, reply_markup=q_btn)
+                except Exception:
+                    pass
+
+            elif data.startswith("quick_q:"):
+                q_term = data.split(":", 1)[1]
+                try:
+                    await query.edit_message_text(f"🔍 **'{q_term}'** tüm eklentilerde aranıyor...")
+                except Exception:
+                    pass
+                results = await Downloader.search_all_plugins(q_term)
+                SEARCH_CACHE[str(user_id)] = results
+                if not results:
+                    try:
+                        await query.edit_message_text(f"❌ **'{q_term}'** için hiçbir kaynakta içerik bulunamadı.")
+                    except Exception:
+                        pass
+                    return
+                text, markup = self.render_search_keyboard(results, page=0, query_title=q_term)
+                try:
+                    await query.edit_message_text(text, reply_markup=markup)
+                except Exception:
+                    pass
+
+            elif data == "btn_main_menu":
+                help_text = (
+                    "👋 **Merhaba! DiziBot'a Hoş Geldiniz.**\n\n"
+                    "🎬 **DiziBot**, 50'den fazla yerli ve yabancı kaynaktan içerikleri tarayan, "
+                    "Türkçe dublaj ve altyazı desteğiyle doğrudan Telegram forum konularına video olarak yükleyen "
+                    "otonom medya asistanınızdır.\n\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "📌 **NASIL KULLANILIR? (REHBER)**\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                    "🔍 **1. İçerik Arama:**\n"
+                    "• `/ara <dizi veya film adı>`\n"
+                    "• *Örnek:* `/ara Suits` veya `/ara Inception`\n\n"
+                    "✍️ **2. Dizi / Film İsteği Bildirme:**\n"
+                    "• `/istek <içerik adı ve sezonu>`\n"
+                    "• *Örnek:* `/istek Prison Break 1. Sezon`\n\n"
+                    "📊 **3. İndirme & Yükleme Takibi:**\n"
+                    "• `/durum` - Aktif indirme/yükleme durumunu canlı takip edin.\n\n"
+                    f"🌐 [Web Sitemiz]({config.website_url}) • 👥 [Telegram Grubumuz]({config.invite_link})\n"
+                )
+                if is_admin:
+                    help_text += (
+                        "\n━━━━━━━━━━━━━━━━━━━━━━\n"
+                        "👑 **YÖNETİCİ KONTROL PANELİ**\n"
+                        "━━━━━━━━━━━━━━━━━━━━━━\n"
+                        "📥 `/indir <Dizi> <Sezon> <Bölüm>` ➔ Doğrudan kuyruğa ekle\n"
+                        "❌ `/iptal <id>` | `/iptal hepsi` ➔ İndirmeyi anında durdur\n"
+                        "🛡️ `/sentinel` ➔ DarkBox Sağlık & Eklenti Denetimi\n"
+                    )
+                start_markup = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("🔍 Hızlı İçerik Ara", callback_data="btn_quick_search"),
+                        InlineKeyboardButton("📊 Canlı Durum", callback_data="status_ref")
+                    ],
+                    [
+                        InlineKeyboardButton("🌐 Web Sitemiz", url=config.website_url),
+                        InlineKeyboardButton("👥 Telegram Grubumuz", url=config.invite_link)
+                    ]
+                ])
+                try:
+                    await query.edit_message_text(help_text, reply_markup=start_markup, disable_web_page_preview=True)
                 except Exception:
                     pass
 
