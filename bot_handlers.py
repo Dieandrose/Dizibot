@@ -161,35 +161,10 @@ class DiziBotManager:
                 target_key, _, _ = Downloader.parse_title_season_episode(series_title)
                 topic_name = f"🎬 {target_key}"
 
-            # 1. Önce Veritabanında Mevcut mu Kontrol Et
+            # 1. Önce Veritabanında Mevcut mu Kontrol Et (Varsa anında dön, gereksiz API çağrısıyla bekletme)
             existing_id = db.get_topic_id(target_key)
             if existing_id and existing_id > 0:
-                api_edit_url = f"https://api.telegram.org/bot{config.bot_token}/editForumTopic"
-                async with httpx.AsyncClient(timeout=6.0) as client:
-                    try:
-                        r = await client.post(api_edit_url, json={
-                            "chat_id": config.target_chat_id,
-                            "message_thread_id": existing_id,
-                            "name": topic_name[:128]
-                        })
-                        res_data = r.json()
-                        desc = str(res_data.get("description", ""))
-                        # Konu canlı ve geçerliyse
-                        if res_data.get("ok") or "TOPIC_NOT_MODIFIED" in desc:
-                            return existing_id
-                        # SADECE konu kesinlikle Telegram'da silinmişse veritabanından temizle
-                        elif "TOPIC_ID_INVALID" in desc or "TOPIC_DELETED" in desc:
-                            logger.warning(f"Kayıtlı konu ID ({existing_id}) Telegram'da kalıcı olarak silinmiş ({desc}), temizlenip yeni açılacak.")
-                            with db._get_conn() as conn:
-                                conn.cursor().execute("DELETE FROM topics WHERE series_title = ?", (db._norm_title(target_key),))
-                                conn.commit()
-                        else:
-                            # Geçici hata, yetki veya flood limitlerinde mevcut ID'yi koru
-                            logger.debug(f"Konu yanıtı ({existing_id}): {res_data} - Mevcut konu korunuyor.")
-                            return existing_id
-                    except Exception as e:
-                        logger.debug(f"Konu doğrulama ağ hatası ({existing_id}): {e} - Mevcut konu korunuyor.")
-                        return existing_id
+                return existing_id
 
             # 2. Veritabanında yoksa (veya kesin silinmişse) YENİ FORUM KONUSU AÇ
             api_url = f"https://api.telegram.org/bot{config.bot_token}/createForumTopic"
@@ -1949,11 +1924,9 @@ class DiziBotManager:
             except Exception as direct_err:
                 logger.debug(f"Doğrudan kaynak çözme hatası ({p_direct}): {direct_err}")
 
-        # Doğrudan seçilen eklentinin adaylarını öncelikli tut, diğer tüm eklentileri arkasına kesintisiz fallback olarak ekle
-        all_fallbacks = await Downloader.find_all_candidate_streams(clean_title, season, episode)
-        for fb in all_fallbacks:
-            if not any(c.get("url") == fb.get("url") for c in candidates):
-                candidates.append(fb)
+        # Doğrudan seçilen eklentiden hiç aday çıkmadıysa, hemen fallback araması yap
+        if not candidates:
+            candidates = await Downloader.find_all_candidate_streams(clean_title, season, episode)
 
         if not candidates:
             logger.warning(f"#{job_id} için akış kaynağı bulunamadı.")
@@ -1961,14 +1934,22 @@ class DiziBotManager:
             return
 
         uploaded_ok = False
+        tried_global_fallback = False
+        tested_urls = set()
+
         try:
-            for cand in candidates:
+            while candidates and not uploaded_ok:
                 if db.is_job_cancelled(job_id):
                     logger.info(f"İşlem #{job_id} iptal edilmiş, akış döngüsü durduruluyor.")
                     break
 
-                p_name = cand["plugin"]
-                stream_url = cand["url"]
+                cand = candidates.pop(0)
+                stream_url = cand.get("url", "")
+                if not stream_url or stream_url in tested_urls:
+                    continue
+                tested_urls.add(stream_url)
+
+                p_name = cand.get("plugin", "Bilinmeyen")
                 logger.info(f"Denenen Kaynak: [{p_name}] -> {stream_url}")
 
                 safe_title = re.sub(r'[^a-zA-Z0-9_\-]', '_', clean_title)
@@ -2202,6 +2183,16 @@ class DiziBotManager:
                             p.unlink(missing_ok=True)
                         except Exception:
                             pass
+
+                # Eğer doğrudan kaynak tükendiyse ve yükleme olmadıysa, diğer tüm eklentileri tara (fallback zinciri)
+                if not uploaded_ok and not candidates and not tried_global_fallback and not db.is_job_cancelled(job_id):
+                    tried_global_fallback = True
+                    logger.info(f"Doğrudan kaynaklar tükendi, alternatif eklentiler taranıyor: {clean_title}")
+                    fallbacks = await Downloader.find_all_candidate_streams(clean_title, season, episode)
+                    for fb in fallbacks:
+                        fb_url = fb.get("url", "")
+                        if fb_url and fb_url not in tested_urls:
+                            candidates.append(fb)
 
             if not uploaded_ok and not db.is_job_cancelled(job_id):
                 db.update_queue_progress(job_id, "failed", error_msg="Tüm alternatif akışlar başarısız oldu")
