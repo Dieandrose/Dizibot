@@ -61,7 +61,7 @@ SESSION_DIR.mkdir(parents=True, exist_ok=True)
 MAX_ALLOWED_FILE_SIZE_BYTES = int(1950 * 1024 * 1024)  # 1950 MB (2GB Telegram sınırının hemen altı)
 
 CORE_SEARCH_PLUGINS = [
-    "DizipalX", "SineWix", "Vizyona", "Hdizipal", "Dizimom", "RecTV", 
+    "DizipalX", "SineWix", "Hdizipal", "Dizimom", "RecTV", 
     "FilmIzleCH", "FullHDFilmizlesene", "FilmMakinesi", "HDFilmCehennemi", 
     "Selcukflix", "JetFilmIzle", "Medya", "DarkTV", "SuperTV", "NetTV"
 ]
@@ -76,7 +76,7 @@ class Config:
         self.target_chat_id: int = -1001909587016
         self.check_interval: int = 900  # 15 dakika
         self.max_file_size_gb: float = 2.0
-        self.plugins_to_watch: List[str] = ["DizipalX", "Vizyona"]
+        self.plugins_to_watch: List[str] = ["DizipalX"]
         self.load()
 
     def load(self):
@@ -110,7 +110,7 @@ class Config:
         self.check_interval = int(os.environ.get("CHECK_INTERVAL", env_vars.get("CHECK_INTERVAL", 900)))
         self.max_file_size_gb = float(os.environ.get("MAX_FILE_SIZE_GB", env_vars.get("MAX_FILE_SIZE_GB", 2.0)))
         
-        plugins_str = os.environ.get("PLUGINS", env_vars.get("PLUGINS", "DizipalX,Vizyona"))
+        plugins_str = os.environ.get("PLUGINS", env_vars.get("PLUGINS", "DizipalX"))
         self.plugins_to_watch = [p.strip() for p in plugins_str.split(",") if p.strip()]
 
 

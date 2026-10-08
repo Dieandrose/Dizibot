@@ -168,7 +168,7 @@ class Downloader:
 
         # En popüler / öncelikli dizi ve film eklentileri
         top_priority = [
-            "Dizi65", "DizipalX", "RecTV", "Vizyona", "SineWix", 
+            "Dizi65", "DizipalX", "RecTV", "SineWix", 
             "FilmMakinesi", "FullHDFilmizlesene", "HDFilmCehennemi", "FilmModu", 
             "Hdizipal", "JetFilmIzle", "Selcukflix", "SetFilmizle", "WebteIzle",
             "Dizimom", "Dizimia", "Dizibal", "Dizibol", "Ddizi", "DiziKorea",
@@ -177,7 +177,7 @@ class Downloader:
             "Sinezy", "TvFilmIzle", "WFilmIzle", "WebDramaTurkey", "ZxcPrime", "Aether", "MeowTV"
         ]
 
-        ignored_plugins = {"CanliTV", "Medya", "DarkTV", "M3uListem"}
+        ignored_plugins = {"CanliTV", "Medya", "DarkTV", "M3uListem", "Vizyona"}
         ordered = [p for p in top_priority if p in all_names and p not in ignored_plugins]
         for p in all_names:
             if p not in ordered and p not in ignored_plugins:
@@ -389,7 +389,7 @@ class Downloader:
             p = c.get("plugin", "")
             rel = float(c.get("relevance", 100.0))
             is_tr = cls.is_candidate_tr_dublaj(c)
-            is_fast_master = p in ["DizipalX", "SineWix", "RecTV", "Vizyona", "Dizipal", "DiziMom", "Dizi65", "FilmModu", "FullHDFilmizlesene", "HDMovie8"]
+            is_fast_master = p in ["DizipalX", "SineWix", "RecTV", "Dizipal", "DiziMom", "Dizi65", "FilmModu", "FullHDFilmizlesene", "HDMovie8"]
             
             # 1. Öncelik: Kesin İçerik Doğruluğu (Relevance). 100% eşleşen içerik asla farklı diziyle ezilemez!
             score = int(rel * 10000)
