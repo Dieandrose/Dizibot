@@ -2166,10 +2166,6 @@ class DiziBotManager:
                                 logger.info(f"Kullanıcıya ({req_by}) yükleme tamamlandı bildirimi gönderildi: {disp_title}")
                             except Exception as notif_err:
                                 logger.debug(f"Kullanıcı tamamlama bildirim hatası: {notif_err}")
-                        
-                        # İşlem Sonrası Otomatik Eksik Bölüm Kontrolü (Sadece Diziler için)
-                        if not is_movie:
-                            asyncio.create_task(self._auto_heal_hook(clean_title, season))
                         break
                 except asyncio.CancelledError:
                     raise
