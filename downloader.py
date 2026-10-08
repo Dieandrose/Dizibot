@@ -187,24 +187,25 @@ class Downloader:
 
     @classmethod
     async def search_all_plugins(cls, query: str) -> List[Dict[str, Any]]:
-        """DarkBox eklentilerinde kontrollü, hızlı ve bellek korumalı paralel arama yapar."""
+        """DarkBox eklentilerinde kontrollü, hızlı ve tüm eklentileri kapsayan paralel arama yapar."""
         plugins = cls.get_all_plugin_names()
-        sem = asyncio.Semaphore(40)
+        sem = asyncio.Semaphore(60)
 
-        # Sorgu varyantları oluştur (Örn: "Örümcek-Adam: Yepyeni Bir Gün (Spider-Man: Brand New Day)" -> ["Örümcek-Adam: Yepyeni Bir Gün", "Spider-Man: Brand New Day"])
-        queries_to_search = [query]
-        for m in re.finditer(r'[\(\[](.*?)[\)\]]', query):
+        # Sorgu varyantları oluştur
+        clean_q = query.strip()
+        queries_to_search = [clean_q]
+        for m in re.finditer(r'[\(\[](.*?)[\)\]]', clean_q):
             sub = m.group(1).strip()
             if len(sub) >= 3 and not sub.isdigit() and sub not in queries_to_search:
                 queries_to_search.append(sub)
-        main_part = re.sub(r'[\(\[].*?[\)\]]', '', query).strip()
+        main_part = re.sub(r'[\(\[].*?[\)\]]', '', clean_q).strip()
         if main_part and main_part not in queries_to_search:
             queries_to_search.append(main_part)
 
         async def _search_plugin_q(p: str, q_term: str):
             async with sem:
                 try:
-                    res = await asyncio.wait_for(local_search(p, q_term), timeout=6.0)
+                    res = await asyncio.wait_for(local_search(p, q_term), timeout=10.0)
                     out = []
                     for item in res:
                         title = item.get("title") if isinstance(item, dict) else (item.title if hasattr(item, "title") else str(item))
@@ -229,7 +230,7 @@ class Downloader:
             for q_term in queries_to_search:
                 tasks.append(asyncio.create_task(_search_plugin_q(p, q_term)))
 
-        done, pending = await asyncio.wait(tasks, timeout=9.0)
+        done, pending = await asyncio.wait(tasks, timeout=14.0)
         for t in pending:
             t.cancel()
             
@@ -243,10 +244,18 @@ class Downloader:
                     key = (item["plugin_name"], item["url"])
                     if key not in seen:
                         seen.add(key)
-                        score = cls.calculate_relevance(query, item["title"])
-                        if score >= 30.0:
-                            item["relevance_score"] = score
-                            flat.append(item)
+                        score = cls.calculate_relevance(clean_q, item["title"])
+                        # Eğer skor sıfırsa bile eklenti bizzat aramada döndürdüyse taban puan ver
+                        if score <= 0.0:
+                            # Ana kelimelerden en az biri içerik başlığında geçiyorsa
+                            q_words = [w.lower() for w in re.sub(r'[^\w\s]', '', clean_q).split() if len(w) >= 3]
+                            t_lower = item["title"].lower()
+                            if any(w in t_lower for w in q_words):
+                                score = 50.0
+                            else:
+                                score = 35.0
+                        item["relevance_score"] = score
+                        flat.append(item)
 
         # En yüksek alaka puanına ve eklenti önceliğine göre sırala
         def sort_key(item):
