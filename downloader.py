@@ -676,7 +676,8 @@ class Downloader:
         output_path: Path, 
         progress_cb: Optional[Callable[..., None]] = None,
         extra_subtitles: Optional[List[Dict[str, Any]]] = None,
-        subtitle_path: Optional[Path] = None
+        subtitle_path: Optional[Path] = None,
+        cancel_check: Optional[Callable[[], bool]] = None
     ) -> Dict[str, Any]:
         """HLS akışını video + Türkçe/Orijinal ses kanalları ve açılıp-kapanabilir Türkçe altyazı (Soft-Sub) ile indirir."""
         custom_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -905,10 +906,14 @@ class Downloader:
                         return b""
 
                 async def fetch_seg(idx: int, s_url: str):
+                    if cancel_check and cancel_check():
+                        return idx, b""
                     nonlocal done_all_chunks, downloaded_bytes, last_working_netloc
                     orig_parsed = urllib.parse.urlparse(s_url)
                     async with sem:
                         for retry in range(12):
+                            if cancel_check and cancel_check():
+                                return idx, b""
                             url_to_try = s_url
                             # Eğer 2. veya sonraki denemedeyse ve çalışan bir CDN mirror varsa, alan adını mirror ile dene
                             if retry >= 2 and last_working_netloc and orig_parsed.netloc != last_working_netloc:

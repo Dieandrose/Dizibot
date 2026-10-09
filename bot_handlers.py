@@ -1886,10 +1886,6 @@ class DiziBotManager:
             logger.info(f"İşlem #{job_id} zaten iptal edilmiş, atlanıyor.")
             return
 
-        cur_task = asyncio.current_task()
-        if cur_task:
-            ACTIVE_TASKS[job_id] = cur_task
-
         is_movie = (season == 0 and episode == 0) or (season == 0)
         clean_title, _, _ = Downloader.parse_title_season_episode(title)
         
@@ -2023,7 +2019,8 @@ class DiziBotManager:
                     temp_file, 
                     progress_cb=prog_cb,
                     extra_subtitles=cand.get("subtitles"),
-                    subtitle_path=sub_file
+                    subtitle_path=sub_file,
+                    cancel_check=lambda: db.is_job_cancelled(job_id)
                 )
                 if not dl_res or not dl_res.get("success") or not temp_file.exists():
                     logger.warning(f"[{p_name}] İndirme başarısız oldu, sonraki kaynağa geçiliyor...")
@@ -2321,10 +2318,18 @@ class DiziBotManager:
                     job = db.get_next_queue_item()
                     if not job:
                         break
+                    job_id = job.get("id")
+                    job_task = asyncio.create_task(self._process_single_job(job))
+                    ACTIVE_TASKS[job_id] = job_task
                     try:
-                        await self._process_single_job(job)
+                        await job_task
+                    except asyncio.CancelledError:
+                        logger.info(f"🛑 İşlem #{job_id} görevi iptal edildi.")
+                        db.cancel_queue_item(job_id)
                     except Exception as e:
-                        logger.error(f"İşleme hatası (Job {job.get('id')}): {e}")
+                        logger.error(f"İşleme hatası (Job {job_id}): {e}")
+                    finally:
+                        ACTIVE_TASKS.pop(job_id, None)
                 await asyncio.sleep(1)
 
         try:
