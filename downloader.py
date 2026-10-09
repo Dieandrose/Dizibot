@@ -682,7 +682,7 @@ class Downloader:
         """HLS akışını video + Türkçe/Orijinal ses kanalları ve açılıp-kapanabilir Türkçe altyazı (Soft-Sub) ile indirir."""
         custom_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         referer_url = stream_url
-        if stream_url.startswith("/proxy/video") or "proxy/video?url=" in stream_url:
+        if stream_url.startswith("/proxy/") or "proxy/video?url=" in stream_url or "proxy/iframe?url=" in stream_url:
             parsed_proxy = urllib.parse.urlparse(stream_url)
             qs = urllib.parse.parse_qs(parsed_proxy.query)
             if "url" in qs and qs["url"]:
@@ -693,6 +693,8 @@ class Downloader:
                 stream_url = real_target
             elif stream_url.startswith("/"):
                 stream_url = f"http://127.0.0.1:3311{stream_url}"
+        elif stream_url.startswith("/"):
+            stream_url = f"http://127.0.0.1:3311{stream_url}"
 
         parsed_ref = urllib.parse.urlparse(referer_url)
         origin_header = f"{parsed_ref.scheme}://{parsed_ref.netloc}" if parsed_ref.netloc else ""
@@ -714,6 +716,9 @@ class Downloader:
                 return {"success": False}
 
             manifest_text = resp.text
+            if not manifest_text.lstrip().startswith("#EXTM3U") and not manifest_text.lstrip().startswith("#EXT-X"):
+                logger.warning(f"HLS Playlist geçersiz (M3U8 başlığı yok veya HTML embed): {stream_url}")
+                return {"success": False}
             lines = [l.strip() for l in manifest_text.splitlines() if l.strip()]
 
             video_target_url = None
@@ -810,7 +815,7 @@ class Downloader:
             async def get_segments_and_key(url: str):
                 try:
                     r = await session.get(url, headers=headers, timeout=10.0)
-                    if r.status_code != 200:
+                    if r.status_code != 200 or not r.text or (not r.text.lstrip().startswith("#EXTM3U") and not r.text.lstrip().startswith("#EXT-X")):
                         return [], None, None
                     m_lines = [ln.strip() for ln in r.text.splitlines() if ln.strip()]
                     
@@ -911,12 +916,12 @@ class Downloader:
                     nonlocal done_all_chunks, downloaded_bytes, last_working_netloc
                     orig_parsed = urllib.parse.urlparse(s_url)
                     async with sem:
-                        for retry in range(12):
+                        for retry in range(3):
                             if cancel_check and cancel_check():
                                 return idx, b""
                             url_to_try = s_url
                             # Eğer 2. veya sonraki denemedeyse ve çalışan bir CDN mirror varsa, alan adını mirror ile dene
-                            if retry >= 2 and last_working_netloc and orig_parsed.netloc != last_working_netloc:
+                            if retry >= 1 and last_working_netloc and orig_parsed.netloc != last_working_netloc:
                                 url_to_try = urllib.parse.urlunparse(orig_parsed._replace(netloc=last_working_netloc))
 
                             try:
