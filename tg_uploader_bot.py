@@ -31,7 +31,7 @@ from Public.API.v1.Libs.local_plugins import LocalProviderClient, list_plugin_na
 
 try:
     from pyrogram import Client
-    from pyrogram.types import Message
+    from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 except ImportError:
     print("HATA: Pyrogram kütüphanesi bulunamadı. Lütfen 'pip install pyrogram tgcrypto' çalıştırın.")
     sys.exit(1)
@@ -782,11 +782,22 @@ class DarkBoxUploaderBot:
 
         logger.info(f"Telegram'a yükleniyor -> Chat: {self.config.target_chat_id} (Konu ID: {topic_id or 'Genel'}) [{display_filename}]")
         
+        bot_user = getattr(self, "bot_username", None)
+        if bot_user:
+            upload_markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔍 İçerik Talep Et", url=f"https://t.me/{bot_user}?start=search")]
+            ])
+        else:
+            upload_markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔍 İçerik Talep Et", callback_data="btn_quick_search")]
+            ])
+
         send_kwargs = {
             "chat_id": self.config.target_chat_id,
             "video": str(file_path),
             "file_name": display_filename,
             "caption": caption,
+            "reply_markup": upload_markup,
             "duration": meta.get("duration", 0),
             "width": meta.get("width", 1280),
             "height": meta.get("height", 720),

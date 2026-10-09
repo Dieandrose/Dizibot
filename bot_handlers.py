@@ -99,6 +99,7 @@ class DiziBotManager:
             proxy=proxy_dict
         )
         self._topic_lock = asyncio.Lock()
+        self.bot_username = None
         self._register_handlers()
         self.is_processing_queue = False
 
@@ -233,6 +234,19 @@ class DiziBotManager:
         # 1. /start ve /yardim
         @self.app.on_message(filters.command(["start", "yardim", "help"]))
         async def cmd_start(client: Client, message: Message):
+            # Derin bağlantı (deep link) ile arama talebi: /start search veya /start ara
+            if len(message.command) > 1 and message.command[1].lower() in ["search", "ara", "talep"]:
+                prompt_text = (
+                    "🔍 **İçerik Arama:**\n\n"
+                    "Lütfen aramak istediğiniz dizi veya film adını yazın.\n\n"
+                    "• *Örnek:* `/ara Suits` veya doğrudan `Suits`"
+                )
+                await message.reply_text(
+                    prompt_text,
+                    reply_markup=ForceReply(selective=True, placeholder="/ara Suits...")
+                )
+                return
+
             u_id = message.from_user.id if message.from_user else 0
             is_admin = u_id in config.admin_ids
 
@@ -1380,11 +1394,22 @@ class DiziBotManager:
                     "• *Örnek:* `/ara Suits` veya doğrudan `Suits`"
                 )
                 try:
-                    await self.app.send_message(
-                        chat_id=user_id,
-                        text=prompt_text,
-                        reply_markup=ForceReply(selective=True, placeholder="/ara Suits...")
-                    )
+                    bot_u = getattr(self, "bot_username", None)
+                    if query.message and query.message.chat and str(query.message.chat.type) in ["ChatType.GROUP", "ChatType.SUPERGROUP", "ChatType.CHANNEL", "group", "supergroup", "channel"]:
+                        if bot_u:
+                            await query.answer(url=f"https://t.me/{bot_u}?start=search")
+                        else:
+                            await self.app.send_message(
+                                chat_id=user_id,
+                                text=prompt_text,
+                                reply_markup=ForceReply(selective=True, placeholder="/ara Suits...")
+                            )
+                    else:
+                        await self.app.send_message(
+                            chat_id=user_id,
+                            text=prompt_text,
+                            reply_markup=ForceReply(selective=True, placeholder="/ara Suits...")
+                        )
                 except Exception:
                     pass
 
@@ -2121,10 +2146,22 @@ class DiziBotManager:
                                 part_contrib = (pct / total_parts) * 0.25
                                 db.update_queue_progress(job_id, "uploading", base_prog + part_contrib)
 
+                        # Video altı butonları (İçerik Talep Et)
+                        bot_user = getattr(self, "bot_username", None)
+                        if bot_user:
+                            post_markup = InlineKeyboardMarkup([
+                                [InlineKeyboardButton("🔍 İçerik Talep Et", url=f"https://t.me/{bot_user}?start=search")]
+                            ])
+                        else:
+                            post_markup = InlineKeyboardMarkup([
+                                [InlineKeyboardButton("🔍 İçerik Talep Et", callback_data="btn_quick_search")]
+                            ])
+
                         sent_msg = await self.app.send_video(
                             chat_id=config.target_chat_id,
                             video=str(part_file),
                             caption=caption,
+                            reply_markup=post_markup,
                             thumb=str(part_thumb) if part_thumb else None,
                             supports_streaming=True,
                             reply_to_message_id=topic_id if topic_id > 0 else None,

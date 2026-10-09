@@ -49,6 +49,7 @@ async def main():
     logger.info("Pyrogram Bot İstemcisi bağlanıyor...")
     await bot_manager.app.start()
     bot_me = await bot_manager.app.get_me()
+    bot_manager.bot_username = bot_me.username
     logger.info(f"Bot Başarıyla Giriş Yaptı: @{bot_me.username} ({bot_me.first_name})")
 
     # Yarım kalan işleri sıfırla
