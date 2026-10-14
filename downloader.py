@@ -682,9 +682,12 @@ class Downloader:
         """HLS akışını video + Türkçe/Orijinal ses kanalları ve açılıp-kapanabilir Türkçe altyazı (Soft-Sub) ile indirir."""
         custom_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         referer_url = stream_url
+        use_warp = False
         if stream_url.startswith("/proxy/") or "proxy/video?url=" in stream_url or "proxy/iframe?url=" in stream_url:
             parsed_proxy = urllib.parse.urlparse(stream_url)
             qs = urllib.parse.parse_qs(parsed_proxy.query)
+            if "force_proxy" in qs or qs.get("proxy", [""])[0] == "warp":
+                use_warp = True
             if "url" in qs and qs["url"]:
                 real_target = qs["url"][0]
                 referer_url = qs.get("referer", [real_target])[0]
@@ -696,6 +699,13 @@ class Downloader:
         elif stream_url.startswith("/"):
             stream_url = f"http://127.0.0.1:3311{stream_url}"
 
+        # Cloudflare / IP korumalı CDN'ler için otomatik WARP tüneli
+        cf_protected = ("dplayer82.site", "kk6k2tczh8.com", "hdplayersystem.com", "pichive.online", "vidmoly")
+        if any(dom in stream_url for dom in cf_protected):
+            use_warp = True
+
+        active_proxy = "socks5://127.0.0.1:4000" if use_warp else (config.proxy or None)
+
         parsed_ref = urllib.parse.urlparse(referer_url)
         origin_header = f"{parsed_ref.scheme}://{parsed_ref.netloc}" if parsed_ref.netloc else ""
         headers = {
@@ -705,7 +715,7 @@ class Downloader:
         if origin_header:
             headers["Origin"] = origin_header
 
-        async with AsyncSession(impersonate="chrome124", proxy=config.proxy, timeout=60) as session:
+        async with AsyncSession(impersonate="chrome124", proxy=active_proxy, timeout=60) as session:
             try:
                 resp = await session.get(stream_url, headers=headers)
                 if resp.status_code != 200:
@@ -875,7 +885,7 @@ class Downloader:
                 if total == 0:
                     return
 
-                sem = asyncio.Semaphore(25 if is_video else 50)
+                sem = asyncio.Semaphore(12 if is_video else 20)
                 nonlocal done_all_chunks, downloaded_bytes
                 last_working_netloc = None
 
