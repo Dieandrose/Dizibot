@@ -168,9 +168,9 @@ class Downloader:
 
         # En popüler / öncelikli dizi ve film eklentileri
         top_priority = [
-            "Dizi65", "Darkboxx", "DizipalX", "Dizirella", "Diziyou", "Dizilab", "Dizigom", "Diziroll", "RecTV", "SineWix", 
+            "Darkboxx", "Dizipal", "DizipalX", "Hdizipal", "Dizi65", "Dizirella", "Diziyou", "Dizilab", "Dizigom", "Diziroll", "RecTV", "SineWix", 
             "FilmMakinesi", "FullHDFilmizlesene", "HDFilmCehennemi", "FilmModu", 
-            "Hdizipal", "JetFilmIzle", "Selcukflix", "SetFilmizle", "WebteIzle",
+            "JetFilmIzle", "Selcukflix", "SetFilmizle", "WebteIzle",
             "Dizimom", "Dizimia", "Dizibal", "Dizibol", "Ddizi", "DiziKorea",
             "DiziIzleClick", "DizifilmLife", "FilmCenneti", "FilmIzleCH", "Filmhane",
             "FullHDFilmIzle", "HDFilmDelisi", "HDFilmUS", "RoketDizi", "SineMerkez",
@@ -189,7 +189,7 @@ class Downloader:
     async def search_all_plugins(cls, query: str) -> List[Dict[str, Any]]:
         """DarkBox eklentilerinde kontrollü, hızlı ve tüm eklentileri kapsayan paralel arama yapar."""
         plugins = cls.get_all_plugin_names()
-        sem = asyncio.Semaphore(60)
+        sem = asyncio.Semaphore(25)
 
         # Sorgu varyantları oluştur
         clean_q = query.strip()
