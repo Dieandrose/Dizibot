@@ -923,6 +923,16 @@ class Downloader:
                 async def fetch_seg(idx: int, s_url: str):
                     if cancel_check and cancel_check():
                         return idx, b""
+                    # Akışlı Disk Yazımı & RAM Koruması (Backpressure): Parça yazılan indeksin çok önündeyse bekle
+                    while idx > next_write_idx + MAX_WINDOW:
+                        write_slot_event.clear()
+                        try:
+                            await asyncio.wait_for(write_slot_event.wait(), timeout=0.5)
+                        except asyncio.TimeoutError:
+                            pass
+                        if cancel_check and cancel_check():
+                            return idx, b""
+
                     nonlocal done_all_chunks, downloaded_bytes, last_working_netloc
                     orig_parsed = urllib.parse.urlparse(s_url)
                     async with sem:
@@ -990,10 +1000,18 @@ class Downloader:
                 completed_chunks = {}
                 next_write_idx = 0
                 missing_chunks_count = 0
+                write_slot_event = asyncio.Event()
+                write_slot_event.set()
+                MAX_WINDOW = 35  # En fazla 35 parça RAM'de tamponlanır (~50-70 MB max)
                 tasks = [asyncio.create_task(fetch_seg(i, seg_list[i])) for i in range(total)]
 
                 with open(dest_file, "wb") as f_out:
                     for fut in asyncio.as_completed(tasks):
+                        if cancel_check and cancel_check():
+                            for t in tasks:
+                                if not t.done():
+                                    t.cancel()
+                            return False
                         idx, chunk = await fut
                         completed_chunks[idx] = chunk
                         while next_write_idx in completed_chunks:
@@ -1003,6 +1021,8 @@ class Downloader:
                             else:
                                 missing_chunks_count += 1
                             next_write_idx += 1
+                            write_slot_event.set()
+                write_slot_event.set()
 
                 if missing_chunks_count > 0:
                     max_allowed_missing = int(total * 0.10)

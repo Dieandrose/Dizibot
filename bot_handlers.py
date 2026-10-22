@@ -941,6 +941,11 @@ class DiziBotManager:
                     await _notify_admins_for_request(req_id, f"{title} (Tüm Sezonlar)", user_id, user_name, plugin)
                     return
 
+                try:
+                    await query.answer("⏳ Tüm bölümler taranıp kuyruğa hazırlanıyor...")
+                except Exception:
+                    pass
+
                 detail = await local_load_item(plugin, url)
                 episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
                 episodes.sort(key=lambda ep: (
@@ -1124,6 +1129,11 @@ class DiziBotManager:
                 title = selected_item.get("title", "")
                 plugin = selected_item.get("plugin_name", "")
                 url = selected_item.get("url", "")
+
+                try:
+                    await query.answer("⏳ Sezon bölümleri taranıyor...")
+                except Exception:
+                    pass
 
                 detail = await local_load_item(plugin, url)
                 episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
@@ -1729,6 +1739,11 @@ class DiziBotManager:
                     await query.answer(f"✅ {p_name} domaini {d.final_url} olarak güncellendi!", show_alert=True)
                 else:
                     await query.answer(f"ℹ️ {p_name} domaini zaten güncel ({d.status}).", show_alert=True)
+            else:
+                try:
+                    await query.answer()
+                except Exception:
+                    pass
 
     def get_system_status_report(self, user_id: int = 0) -> Tuple[str, InlineKeyboardMarkup]:
         is_admin = (user_id in config.admin_ids)
