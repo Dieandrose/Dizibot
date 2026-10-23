@@ -889,10 +889,8 @@ class Downloader:
             ):
                 total = len(seg_list)
                 if total == 0:
-                    return
+                    return True
 
-                is_proxied = bool(current_proxy)
-                sem = asyncio.Semaphore(25)
                 nonlocal done_all_chunks, downloaded_bytes
                 last_working_netloc = None
 
@@ -927,21 +925,45 @@ class Downloader:
                     except Exception:
                         return b""
 
-                async def fetch_seg(idx: int, s_url: str):
-                    if cancel_check and cancel_check():
-                        return idx, b""
-                    # Akışlı Disk Yazımı & RAM Koruması (Backpressure): Parça yazılan indeksin çok önündeyse bekle
-                    while idx > next_write_idx + MAX_WINDOW:
-                        await asyncio.sleep(0.02)
-                        if cancel_check and cancel_check():
-                            return idx, b""
+                q = asyncio.Queue()
+                for i, u in enumerate(seg_list):
+                    q.put_nowait((i, u))
 
-                    nonlocal done_all_chunks, downloaded_bytes, last_working_netloc
-                    orig_parsed = urllib.parse.urlparse(s_url)
-                    async with sem:
+                completed_chunks = {}
+                next_write_idx = 0
+                missing_chunks_count = 0
+                MAX_WINDOW = 60
+                dl_failed = False
+
+                async def worker():
+                    nonlocal done_all_chunks, downloaded_bytes, last_working_netloc, dl_failed
+                    while not q.empty() and not dl_failed:
+                        if cancel_check and cancel_check():
+                            dl_failed = True
+                            break
+                        try:
+                            idx, s_url = q.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+
+                        # Backpressure: Disk yazımı çok gerideyse bekle (RAM taşmasını önler)
+                        while idx > next_write_idx + MAX_WINDOW and not dl_failed:
+                            if cancel_check and cancel_check():
+                                dl_failed = True
+                                break
+                            await asyncio.sleep(0.02)
+
+                        if dl_failed:
+                            q.task_done()
+                            break
+
+                        orig_parsed = urllib.parse.urlparse(s_url)
+                        chunk_data = None
+
                         for retry in range(5):
                             if cancel_check and cancel_check():
-                                return idx, b""
+                                dl_failed = True
+                                break
                             url_to_try = s_url
                             # Eğer 2. veya sonraki denemedeyse ve çalışan bir CDN mirror varsa, alan adını mirror ile dene
                             if retry >= 1 and last_working_netloc and orig_parsed.netloc != last_working_netloc:
@@ -966,17 +988,18 @@ class Downloader:
                                 done_all_chunks += 1
                                 downloaded_bytes += len(res.content)
                                 last_working_netloc = orig_parsed.netloc if res.url == s_url else last_working_netloc
-                                chunk_data = res.content
+                                c_bytes = res.content
                                 # AES-128 Şifre Çözme
                                 if key_bytes:
                                     try:
                                         iv = key_iv if key_iv else idx.to_bytes(16, 'big')
                                         cipher = Cipher(algorithms.AES(key_bytes), modes.CBC(iv), backend=default_backend())
                                         decryptor = cipher.decryptor()
-                                        chunk_data = decryptor.update(chunk_data) + decryptor.finalize()
+                                        c_bytes = decryptor.update(c_bytes) + decryptor.finalize()
                                     except Exception as dec_err:
                                         logger.debug(f"Segment #{idx} AES çözme hatası: {dec_err}")
-                                        
+                                chunk_data = c_bytes
+
                                 if progress_cb and tot_all_chunks > 0 and (done_all_chunks % 10 == 0 or done_all_chunks == tot_all_chunks):
                                     elapsed = max(0.1, time.time() - start_dl_time)
                                     cur_mb = downloaded_bytes / (1024 * 1024)
@@ -998,41 +1021,53 @@ class Downloader:
                                             progress_cb(frac, done_all_chunks, tot_all_chunks)
                                         except Exception:
                                             progress_cb(frac)
-                                return idx, chunk_data
+                                break
                             else:
-                                await asyncio.sleep(0.4 + retry * 0.4)
+                                await asyncio.sleep(0.3 + retry * 0.3)
 
-                        # Eğer ses parçasıysa ve inemediyse, ses zaman çizgisinin kaymaması için sessiz parça ile doldur
-                        if not is_video:
-                            silent_bytes = get_silent_ts_pad()
-                            if silent_bytes:
-                                done_all_chunks += 1
-                                return idx, silent_bytes
+                        if chunk_data is None:
+                            if not is_video:
+                                silent_bytes = get_silent_ts_pad()
+                                if silent_bytes:
+                                    done_all_chunks += 1
+                                    chunk_data = silent_bytes
+                            if chunk_data is None:
+                                chunk_data = b""
 
-                        return idx, b""
+                        completed_chunks[idx] = chunk_data
+                        q.task_done()
 
-                completed_chunks = {}
-                next_write_idx = 0
-                missing_chunks_count = 0
-                MAX_WINDOW = 60  # RAM tamponu: ~60-80 MB max
-                tasks = [asyncio.create_task(fetch_seg(i, seg_list[i])) for i in range(total)]
+                # 25 işçi çalıştır (CPU'yu kilitlemeyen sabit havuz)
+                num_workers = 25
+                worker_tasks = [asyncio.create_task(worker()) for _ in range(num_workers)]
 
                 with open(dest_file, "wb") as f_out:
-                    for fut in asyncio.as_completed(tasks):
+                    while next_write_idx < total:
                         if cancel_check and cancel_check():
-                            for t in tasks:
-                                if not t.done():
-                                    t.cancel()
+                            dl_failed = True
+                            for t in worker_tasks:
+                                t.cancel()
                             return False
-                        idx, chunk = await fut
-                        completed_chunks[idx] = chunk
-                        while next_write_idx in completed_chunks:
+
+                        if next_write_idx in completed_chunks:
                             c = completed_chunks.pop(next_write_idx)
                             if c:
                                 f_out.write(c)
                             else:
                                 missing_chunks_count += 1
                             next_write_idx += 1
+                        else:
+                            if dl_failed:
+                                break
+                            await asyncio.sleep(0.005)
+
+                await q.join()
+                for t in worker_tasks:
+                    if not t.done():
+                        t.cancel()
+
+                if dl_failed:
+                    return False
 
                 if missing_chunks_count > 0:
                     # Video parça kaybı kesinlikle kabul edilemez (ses senkronunu doğrudan bozar)
