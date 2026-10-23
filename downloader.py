@@ -728,7 +728,8 @@ class Downloader:
             logger.warning(f"HLS Playlist indirilemedi veya geçersiz (200 dönmedi): {stream_url}")
             return {"success": False}
 
-        async with AsyncSession(impersonate="chrome124", proxy=current_proxy, timeout=60) as session:
+        async with AsyncSession(impersonate="chrome124", proxy=current_proxy, timeout=60) as session, \
+                   AsyncSession(impersonate="chrome124", timeout=20) as direct_session:
 
             manifest_text = resp.text
             if not manifest_text.lstrip().startswith("#EXTM3U") and not manifest_text.lstrip().startswith("#EXT-X"):
@@ -891,7 +892,7 @@ class Downloader:
                     return
 
                 is_proxied = bool(current_proxy)
-                sem = asyncio.Semaphore(12 if is_proxied else 22)
+                sem = asyncio.Semaphore(25)
                 nonlocal done_all_chunks, downloaded_bytes
                 last_working_netloc = None
 
@@ -946,48 +947,59 @@ class Downloader:
                             if retry >= 1 and last_working_netloc and orig_parsed.netloc != last_working_netloc:
                                 url_to_try = urllib.parse.urlunparse(orig_parsed._replace(netloc=last_working_netloc))
 
+                            res = None
+                            # 1. Önce doğrudan gigabit hat ile çekmeyi dene (Media CDN'leri IP engeli uygulamaz, 25-50 MB/s verir)
                             try:
-                                res = await session.get(url_to_try, headers=headers, timeout=15.0)
-                                if res.status_code == 200 and is_valid_chunk(res.content):
-                                    done_all_chunks += 1
-                                    downloaded_bytes += len(res.content)
-                                    last_working_netloc = orig_parsed.netloc if res.url == s_url else last_working_netloc
-                                    chunk_data = res.content
-                                    # AES-128 Şifre Çözme
-                                    if key_bytes:
-                                        try:
-                                            iv = key_iv if key_iv else idx.to_bytes(16, 'big')
-                                            cipher = Cipher(algorithms.AES(key_bytes), modes.CBC(iv), backend=default_backend())
-                                            decryptor = cipher.decryptor()
-                                            chunk_data = decryptor.update(chunk_data) + decryptor.finalize()
-                                        except Exception as dec_err:
-                                            logger.debug(f"Segment #{idx} AES çözme hatası: {dec_err}")
-                                            
-                                    if progress_cb and tot_all_chunks > 0 and (done_all_chunks % 10 == 0 or done_all_chunks == tot_all_chunks):
-                                        elapsed = max(0.1, time.time() - start_dl_time)
-                                        cur_mb = downloaded_bytes / (1024 * 1024)
-                                        speed_mb = cur_mb / elapsed
-                                        frac = done_all_chunks / tot_all_chunks
-                                        tot_est_mb = cur_mb / max(0.01, frac)
-                                        try:
-                                            progress_cb(
-                                                frac, 
-                                                done_seg=done_all_chunks, 
-                                                tot_seg=tot_all_chunks, 
-                                                cur_mb=cur_mb, 
-                                                tot_mb=tot_est_mb, 
-                                                speed_mb=speed_mb, 
-                                                phase="downloading"
-                                            )
-                                        except TypeError:
-                                            try:
-                                                progress_cb(frac, done_all_chunks, tot_all_chunks)
-                                            except Exception:
-                                                progress_cb(frac)
-                                    return idx, chunk_data
-                                else:
-                                    await asyncio.sleep(0.4 + retry * 0.4)
+                                res = await direct_session.get(url_to_try, headers=headers, timeout=12.0)
                             except Exception:
+                                res = None
+
+                            # 2. Doğrudan hat başarısız olursa veya proxy gerekiyorsa session (WARP/Config) ile dene
+                            if not res or res.status_code != 200 or not is_valid_chunk(res.content):
+                                if current_proxy:
+                                    try:
+                                        res = await session.get(url_to_try, headers=headers, timeout=15.0)
+                                    except Exception:
+                                        res = None
+
+                            if res and res.status_code == 200 and is_valid_chunk(res.content):
+                                done_all_chunks += 1
+                                downloaded_bytes += len(res.content)
+                                last_working_netloc = orig_parsed.netloc if res.url == s_url else last_working_netloc
+                                chunk_data = res.content
+                                # AES-128 Şifre Çözme
+                                if key_bytes:
+                                    try:
+                                        iv = key_iv if key_iv else idx.to_bytes(16, 'big')
+                                        cipher = Cipher(algorithms.AES(key_bytes), modes.CBC(iv), backend=default_backend())
+                                        decryptor = cipher.decryptor()
+                                        chunk_data = decryptor.update(chunk_data) + decryptor.finalize()
+                                    except Exception as dec_err:
+                                        logger.debug(f"Segment #{idx} AES çözme hatası: {dec_err}")
+                                        
+                                if progress_cb and tot_all_chunks > 0 and (done_all_chunks % 10 == 0 or done_all_chunks == tot_all_chunks):
+                                    elapsed = max(0.1, time.time() - start_dl_time)
+                                    cur_mb = downloaded_bytes / (1024 * 1024)
+                                    speed_mb = cur_mb / elapsed
+                                    frac = done_all_chunks / tot_all_chunks
+                                    tot_est_mb = cur_mb / max(0.01, frac)
+                                    try:
+                                        progress_cb(
+                                            frac, 
+                                            done_seg=done_all_chunks, 
+                                            tot_seg=tot_all_chunks, 
+                                            cur_mb=cur_mb, 
+                                            tot_mb=tot_est_mb, 
+                                            speed_mb=speed_mb, 
+                                            phase="downloading"
+                                        )
+                                    except TypeError:
+                                        try:
+                                            progress_cb(frac, done_all_chunks, tot_all_chunks)
+                                        except Exception:
+                                            progress_cb(frac)
+                                return idx, chunk_data
+                            else:
                                 await asyncio.sleep(0.4 + retry * 0.4)
 
                         # Eğer ses parçasıysa ve inemediyse, ses zaman çizgisinin kaymaması için sessiz parça ile doldur
@@ -1002,7 +1014,7 @@ class Downloader:
                 completed_chunks = {}
                 next_write_idx = 0
                 missing_chunks_count = 0
-                MAX_WINDOW = 40 if is_proxied else 60  # RAM tamponu: ~60-80 MB max
+                MAX_WINDOW = 60  # RAM tamponu: ~60-80 MB max
                 tasks = [asyncio.create_task(fetch_seg(i, seg_list[i])) for i in range(total)]
 
                 with open(dest_file, "wb") as f_out:
@@ -1032,7 +1044,7 @@ class Downloader:
                         logger.info(f"ℹ️ {dest_file.name} için {missing_chunks_count}/{total} parça atlandı.")
                 return True
 
-            channel_name = "WARP Tünel (12x)" if current_proxy else "Direct Gigabit (22x)"
+            channel_name = f"Direct Gigabit (25x) [Fallback: {'WARP' if current_proxy else 'None'}]"
             logger.info(f"HLS İndiriliyor (Hızlı): Video={len(video_segs)} parça" + (f", Ses={len(audio_tr_segs)} parça" if audio_tr_segs else "") + f" [{channel_name}]")
             dl_tasks = [download_seg_list(video_segs, tmp_video_file, key_bytes=v_key_bytes, key_iv=v_key_iv, is_video=True)]
             if audio_tr_segs and tmp_audio_tr_file:
