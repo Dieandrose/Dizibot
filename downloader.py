@@ -699,13 +699,6 @@ class Downloader:
         elif stream_url.startswith("/"):
             stream_url = f"http://127.0.0.1:3311{stream_url}"
 
-        # Cloudflare / IP korumalı CDN'ler için otomatik WARP tüneli
-        cf_protected = ("dplayer82.site", "kk6k2tczh8.com", "hdplayersystem.com", "pichive.online", "vidmoly")
-        if any(dom in stream_url for dom in cf_protected):
-            use_warp = True
-
-        active_proxy = "socks5://127.0.0.1:4000" if use_warp else (config.proxy or None)
-
         parsed_ref = urllib.parse.urlparse(referer_url)
         origin_header = f"{parsed_ref.scheme}://{parsed_ref.netloc}" if parsed_ref.netloc else ""
         headers = {
@@ -715,15 +708,27 @@ class Downloader:
         if origin_header:
             headers["Origin"] = origin_header
 
-        async with AsyncSession(impersonate="chrome124", proxy=active_proxy, timeout=60) as session:
+        active_proxy = "socks5://127.0.0.1:4000" if use_warp else (config.proxy or None)
+
+        # Öncelik: Doğrudan Gigabit hat. Engel/Challenge olursa otomatik WARP fallback.
+        current_proxy = active_proxy
+        resp = None
+        for try_proxy in ([active_proxy] if active_proxy else [None, "socks5://127.0.0.1:4000"]):
             try:
-                resp = await session.get(stream_url, headers=headers)
-                if resp.status_code != 200:
-                    logger.warning(f"HLS Playlist 200 dönmedi: {resp.status_code}")
-                    return {"success": False}
+                async with AsyncSession(impersonate="chrome124", proxy=try_proxy, timeout=12) as test_sess:
+                    r = await test_sess.get(stream_url, headers=headers)
+                    if r.status_code == 200 and (r.text.lstrip().startswith("#EXTM3U") or r.text.lstrip().startswith("#EXT-X")):
+                        resp = r
+                        current_proxy = try_proxy
+                        break
             except Exception as e:
-                logger.error(f"HLS Playlist istek hatası: {e}")
-                return {"success": False}
+                logger.debug(f"HLS Playlist erişim testi ({try_proxy}): {e}")
+
+        if not resp:
+            logger.warning(f"HLS Playlist indirilemedi veya geçersiz (200 dönmedi): {stream_url}")
+            return {"success": False}
+
+        async with AsyncSession(impersonate="chrome124", proxy=current_proxy, timeout=60) as session:
 
             manifest_text = resp.text
             if not manifest_text.lstrip().startswith("#EXTM3U") and not manifest_text.lstrip().startswith("#EXT-X"):
@@ -885,7 +890,8 @@ class Downloader:
                 if total == 0:
                     return
 
-                sem = asyncio.Semaphore(12 if is_video else 20)
+                is_proxied = bool(current_proxy)
+                sem = asyncio.Semaphore(12 if is_proxied else 22)
                 nonlocal done_all_chunks, downloaded_bytes
                 last_working_netloc = None
 
@@ -925,18 +931,14 @@ class Downloader:
                         return idx, b""
                     # Akışlı Disk Yazımı & RAM Koruması (Backpressure): Parça yazılan indeksin çok önündeyse bekle
                     while idx > next_write_idx + MAX_WINDOW:
-                        write_slot_event.clear()
-                        try:
-                            await asyncio.wait_for(write_slot_event.wait(), timeout=0.5)
-                        except asyncio.TimeoutError:
-                            pass
+                        await asyncio.sleep(0.02)
                         if cancel_check and cancel_check():
                             return idx, b""
 
                     nonlocal done_all_chunks, downloaded_bytes, last_working_netloc
                     orig_parsed = urllib.parse.urlparse(s_url)
                     async with sem:
-                        for retry in range(3):
+                        for retry in range(5):
                             if cancel_check and cancel_check():
                                 return idx, b""
                             url_to_try = s_url
@@ -984,9 +986,9 @@ class Downloader:
                                                 progress_cb(frac)
                                     return idx, chunk_data
                                 else:
-                                    await asyncio.sleep(0.3 + retry * 0.3)
+                                    await asyncio.sleep(0.4 + retry * 0.4)
                             except Exception:
-                                await asyncio.sleep(0.3 + retry * 0.3)
+                                await asyncio.sleep(0.4 + retry * 0.4)
 
                         # Eğer ses parçasıysa ve inemediyse, ses zaman çizgisinin kaymaması için sessiz parça ile doldur
                         if not is_video:
@@ -1000,9 +1002,7 @@ class Downloader:
                 completed_chunks = {}
                 next_write_idx = 0
                 missing_chunks_count = 0
-                write_slot_event = asyncio.Event()
-                write_slot_event.set()
-                MAX_WINDOW = 35  # En fazla 35 parça RAM'de tamponlanır (~50-70 MB max)
+                MAX_WINDOW = 40 if is_proxied else 60  # RAM tamponu: ~60-80 MB max
                 tasks = [asyncio.create_task(fetch_seg(i, seg_list[i])) for i in range(total)]
 
                 with open(dest_file, "wb") as f_out:
@@ -1021,19 +1021,19 @@ class Downloader:
                             else:
                                 missing_chunks_count += 1
                             next_write_idx += 1
-                            write_slot_event.set()
-                write_slot_event.set()
 
                 if missing_chunks_count > 0:
-                    max_allowed_missing = int(total * 0.10)
+                    # Video parça kaybı kesinlikle kabul edilemez (ses senkronunu doğrudan bozar)
+                    max_allowed_missing = 0 if is_video else 2
                     if missing_chunks_count > max_allowed_missing:
-                        logger.warning(f"⚠️ {dest_file.name} için {missing_chunks_count}/{total} parça eksik kaldı (Limit aşıldı, akış reddedildi).")
+                        logger.warning(f"⚠️ {dest_file.name} için {missing_chunks_count}/{total} parça eksik kaldı (Senkron ve veri kaybı engeli, akış reddedildi).")
                         return False
                     else:
-                        logger.info(f"ℹ️ {dest_file.name} için {missing_chunks_count}/{total} parça atlandı (FFmpeg aresample/genpts ile senkron tamamlanacak).")
+                        logger.info(f"ℹ️ {dest_file.name} için {missing_chunks_count}/{total} parça atlandı.")
                 return True
 
-            logger.info(f"HLS İndiriliyor (Hızlı): Video={len(video_segs)} parça" + (f", Ses={len(audio_tr_segs)} parça" if audio_tr_segs else ""))
+            channel_name = "WARP Tünel (12x)" if current_proxy else "Direct Gigabit (22x)"
+            logger.info(f"HLS İndiriliyor (Hızlı): Video={len(video_segs)} parça" + (f", Ses={len(audio_tr_segs)} parça" if audio_tr_segs else "") + f" [{channel_name}]")
             dl_tasks = [download_seg_list(video_segs, tmp_video_file, key_bytes=v_key_bytes, key_iv=v_key_iv, is_video=True)]
             if audio_tr_segs and tmp_audio_tr_file:
                 dl_tasks.append(download_seg_list(audio_tr_segs, tmp_audio_tr_file, key_bytes=a_key_bytes, key_iv=a_key_iv, is_video=False))
@@ -1093,7 +1093,9 @@ class Downloader:
                 cmd = [
                     "ffmpeg", "-y",
                     "-threads", "0",
+                    "-fflags", "+genpts",
                     "-i", str(tmp_video_file),
+                    "-fflags", "+genpts",
                     "-i", str(tmp_audio_tr_file),
                     *sub_inputs,
                     "-map", "0:v:0",
@@ -1102,6 +1104,7 @@ class Downloader:
                     "-c:v", "copy",
                     "-c:a", "copy",
                     "-bsf:a", "aac_adtstoasc",
+                    "-avoid_negative_ts", "make_zero",
                     *audio_meta,
                     *sub_meta,
                     "-movflags", "+faststart",
@@ -1111,6 +1114,7 @@ class Downloader:
                 cmd = [
                     "ffmpeg", "-y",
                     "-threads", "0",
+                    "-fflags", "+genpts",
                     "-i", str(tmp_video_file),
                     *sub_inputs,
                     "-map", "0:v:0",
@@ -1119,6 +1123,7 @@ class Downloader:
                     "-c:v", "copy",
                     "-c:a", "copy",
                     "-bsf:a", "aac_adtstoasc",
+                    "-avoid_negative_ts", "make_zero",
                     *audio_meta,
                     *sub_meta,
                     "-movflags", "+faststart",
