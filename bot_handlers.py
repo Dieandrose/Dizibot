@@ -127,11 +127,25 @@ class DiziBotManager:
                 )
             ])
 
+        items_summary = []
         for idx_offset, r in enumerate(page_items):
             global_idx = start_idx + idx_offset
             title = r.get("title", "İçerik")
             plugin = r.get("plugin_name", "Kaynak")
-            buttons.append([InlineKeyboardButton(f"🎬 {title} [{plugin}]", callback_data=f"sel_res:{global_idx}")])
+            desc = (r.get("description") or "").strip()
+            year = r.get("year") or ""
+            year_badge = f" ({year})" if year and str(year) not in title else ""
+
+            # Numaralandırma (1️⃣ - 🔟)
+            num_emoji = f"{idx_offset+1}." if idx_offset >= 9 else f"{idx_offset+1}️⃣"
+            btn_title = f"{num_emoji} {title}{year_badge} [{plugin}]"
+            if len(btn_title.encode('utf-8')) > 62:
+                btn_title = btn_title[:46] + f"... [{plugin}]"
+            buttons.append([InlineKeyboardButton(btn_title, callback_data=f"sel_res:{global_idx}")])
+
+            # Metin alanı için kısa ayırt edici özet
+            desc_snip = f"\n   📝 _{desc[:85]}..._" if desc else ""
+            items_summary.append(f"**{num_emoji} {title}{year_badge}** • `[{plugin}]`{desc_snip}")
 
         nav_row = []
         if page > 0:
@@ -150,7 +164,8 @@ class DiziBotManager:
             cnt_str = f" (**{forum_info['uploaded_count']}** bölüm yüklü)" if forum_info['uploaded_count'] > 0 else ""
             forum_banner = f"✨ **Bu içerik zaten forumumuzda mevcut!**{cnt_str}\n👉 Doğrudan izlemek için yukarıdaki **`📍 Forumda Mevcut`** butonuna tıklayabilirsiniz.\n\n"
 
-        text = f"{header} (Sayfa {page+1}/{total_pages}):\n{forum_banner}İndirmek veya yeni kaynak seçmek için:"
+        summary_block = "\n\n".join(items_summary) if items_summary else ""
+        text = f"{header} (Sayfa {page+1}/{total_pages}):\n\n{forum_banner}{summary_block}\n\n👇 **Afişini, konusunu görmek ve indirmek için bir içerik seçin:**"
         return text, InlineKeyboardMarkup(buttons)
 
     async def get_or_create_series_topic(self, series_title: str, is_movie: bool = False) -> int:
@@ -203,7 +218,7 @@ class DiziBotManager:
                     title = item.get("title", "İçerik")
                     plugin = item.get("plugin_name", "Kaynak")
                     url = item.get("url", "")
-                    poster = item.get("poster")
+                    poster = Downloader.clean_poster_url(item.get("poster"))
                     desc = item.get("description") or f"{plugin} üzerinden izle / indir"
 
                     thumb_url = poster if poster and poster.startswith("http") else None
@@ -850,9 +865,13 @@ class DiziBotManager:
                 title = selected_item.get("title", "")
                 plugin = selected_item.get("plugin_name", "Kaynak")
                 url = selected_item.get("url", "")
+                poster = selected_item.get("poster", "")
+                desc = selected_item.get("description", "")
+                year = selected_item.get("year", "")
+                tags = selected_item.get("tags", "")
 
                 try:
-                    await query.answer("⏳ Detaylar alınıyor...")
+                    await query.answer("⏳ Detaylar ve afiş alınıyor...")
                 except Exception:
                     pass
 
@@ -863,7 +882,16 @@ class DiziBotManager:
                     logger.warning(f"Plugin {plugin} load_item zaman aşımı/hata: {load_err}")
 
                 episodes = (detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])) if detail else []
-                
+
+                # Detaydan gelen zengin bilgileri harmanla
+                if detail:
+                    poster = getattr(detail, "poster", None) or (detail.get("poster") if isinstance(detail, dict) else None) or poster
+                    desc = getattr(detail, "description", None) or (detail.get("description") if isinstance(detail, dict) else None) or desc
+                    year = getattr(detail, "year", None) or (detail.get("year") if isinstance(detail, dict) else None) or year
+                    tags = getattr(detail, "tags", None) or (detail.get("tags") if isinstance(detail, dict) else None) or tags
+
+                clean_poster = Downloader.clean_poster_url(poster)
+
                 # Dizi Kontrolü: Bölüm listesi var ve birden fazla bölüm veya sezon bilgisi içeriyor mu?
                 is_series = bool(episodes and len(episodes) > 0 and (
                     len(episodes) > 1 or 
@@ -871,6 +899,14 @@ class DiziBotManager:
                     (episodes[0].get("episode", 0) if isinstance(episodes[0], dict) else getattr(episodes[0], "episode", 0)) > 1 or
                     "/dizi/" in url or "/tv/" in url or "diziler" in url
                 ))
+
+                # Kart metni formatlama
+                preview_link = f"[\u200b]({clean_poster})" if clean_poster else ""
+                type_badge = "📺 **Dizi**" if is_series else "🎬 **Film / Tek Parça**"
+                year_badge = f" • 📅 `{year}`" if year else ""
+                tags_badge = f"\n🎭 **Tür:** `{tags}`" if tags else ""
+                clean_desc = desc.strip() if desc else ""
+                desc_badge = f"\n\n📝 **Özet:**\n_{clean_desc[:320]}..._" if clean_desc else ""
 
                 if is_series:
                     seasons = []
@@ -897,26 +933,52 @@ class DiziBotManager:
                     if row:
                         s_buttons.append(row)
                     
-                    # Geri butonu (Arama sonuçlarına dön)
-                    s_buttons.append([InlineKeyboardButton("🔙 Arama Sonuçlarına Dön", callback_data="back_search")])
+                    # Alt aksiyon butonları: Afişi Büyüt + Geri
+                    bottom_row = []
+                    if clean_poster and clean_poster.startswith("http"):
+                        bottom_row.append(InlineKeyboardButton("🖼️ Afişi Gör", url=clean_poster))
+                    bottom_row.append(InlineKeyboardButton("🔙 Arama Sonuçlarına Dön", callback_data="back_search"))
+                    s_buttons.append(bottom_row)
+
+                    card_text = (
+                        f"{preview_link}🎬 **{title}** `[{plugin}]`\n"
+                        f"📌 {type_badge}{year_badge}{tags_badge}\n"
+                        f"📊 **Kapsam:** {len(seasons)} Sezon, {len(episodes)} Bölüm"
+                        f"{desc_badge}\n\n"
+                        f"👇 **Lütfen indirmek istediğiniz seçeneği belirleyin:**"
+                    )
 
                     try:
                         await query.edit_message_text(
-                            f"🎬 **{title}** [{plugin}]\n📌 **Dizi:** {len(seasons)} Sezon, {len(episodes)} Bölüm\n\nLütfen indirmek istediğiniz seçeneği belirleyin:",
-                            reply_markup=InlineKeyboardMarkup(s_buttons)
+                            card_text,
+                            reply_markup=InlineKeyboardMarkup(s_buttons),
+                            disable_web_page_preview=False
                         )
                     except Exception as e:
                         logger.debug(f"Mesaj düzenleme hatası: {e}")
                 else:
                     # Film veya Tek Parça İçerik -> Filmler Konusuna Aktarılacak
-                    btn = InlineKeyboardMarkup([
-                        [InlineKeyboardButton("📥 FİLMİ İNDİR & YÜKLE", callback_data=f"dl_movie:{idx}")],
-                        [InlineKeyboardButton("🔙 Arama Sonuçlarına Dön", callback_data="back_search")]
-                    ])
+                    btn_rows = [
+                        [InlineKeyboardButton("📥 FİLMİ İNDİR & YÜKLE", callback_data=f"dl_movie:{idx}")]
+                    ]
+                    bottom_row = []
+                    if clean_poster and clean_poster.startswith("http"):
+                        bottom_row.append(InlineKeyboardButton("🖼️ Afişi Gör", url=clean_poster))
+                    bottom_row.append(InlineKeyboardButton("🔙 Arama Sonuçlarına Dön", callback_data="back_search"))
+                    btn_rows.append(bottom_row)
+
+                    card_text = (
+                        f"{preview_link}🎬 **{title}** `[{plugin}]`\n"
+                        f"📌 {type_badge}{year_badge}{tags_badge}"
+                        f"{desc_badge}\n\n"
+                        f"🍿 Bu film doğrudan **'🎬 Filmler'** konusuna yüklenecektir."
+                    )
+
                     try:
                         await query.edit_message_text(
-                            f"🎬 **{title}** [{plugin}]\n📌 **Tür:** Film / Tek Parça\n\nBu içerik doğrudan **'🎬 Filmler'** konusuna yüklenecektir.",
-                            reply_markup=btn
+                            card_text,
+                            reply_markup=InlineKeyboardMarkup(btn_rows),
+                            disable_web_page_preview=False
                         )
                     except Exception as e:
                         logger.debug(f"Mesaj düzenleme hatası: {e}")

@@ -185,6 +185,33 @@ class Downloader:
 
         return ordered if ordered else config.plugins_priority
 
+    @staticmethod
+    def clean_poster_url(poster_raw: str, website_url: str = "") -> str:
+        """Eklentilerden dönen ham /proxy/image veya göreceli afiş URL'lerini doğrudan resim URL'sine dönüştürür."""
+        if not poster_raw:
+            return ""
+        poster_str = str(poster_raw).strip()
+        if "url=" in poster_str:
+            try:
+                parsed = urllib.parse.urlparse(poster_str)
+                qs = urllib.parse.parse_qs(parsed.query)
+                if "url" in qs and qs["url"]:
+                    target_url = qs["url"][0]
+                    if target_url.startswith("//"):
+                        return "https:" + target_url
+                    if target_url.startswith("http://") or target_url.startswith("https://"):
+                        return target_url
+            except Exception:
+                pass
+        if poster_str.startswith("//"):
+            return "https:" + poster_str
+        if poster_str.startswith("http://") or poster_str.startswith("https://"):
+            return poster_str
+        if poster_str.startswith("/"):
+            base = (website_url or getattr(config, "website_url", "") or "https://izle.darkbox.com.tr:9443").rstrip("/")
+            return f"{base}{poster_str}"
+        return ""
+
     @classmethod
     async def search_all_plugins(cls, query: str) -> List[Dict[str, Any]]:
         """DarkBox eklentilerinde kontrollü, hızlı ve tüm eklentileri kapsayan paralel arama yapar."""
@@ -212,12 +239,16 @@ class Downloader:
                         url = item.get("url") if isinstance(item, dict) else (item.url if hasattr(item, "url") else "")
                         poster = item.get("poster") if isinstance(item, dict) else (item.poster if hasattr(item, "poster") else "")
                         desc = item.get("description") if isinstance(item, dict) else (item.description if hasattr(item, "description") else "")
+                        year = item.get("year") if isinstance(item, dict) else getattr(item, "year", None)
+                        tags = item.get("tags") if isinstance(item, dict) else getattr(item, "tags", None)
                         if title and url:
                             out.append({
                                 "title": title,
                                 "url": url,
-                                "poster": poster,
+                                "poster": cls.clean_poster_url(poster),
                                 "description": desc,
+                                "year": year,
+                                "tags": tags,
                                 "plugin_name": p
                             })
                     return out
