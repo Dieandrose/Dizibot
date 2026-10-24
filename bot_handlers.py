@@ -2026,6 +2026,9 @@ class DiziBotManager:
         if not candidates:
             candidates = await Downloader.find_all_candidate_streams(clean_title, season, episode)
 
+        # Tüm adayları (doğrudan linkler ve fallback'ler dahil) Türkçe Dublaj önceliğine göre sırala
+        candidates = Downloader.sort_candidates(candidates)
+
         if not candidates:
             logger.warning(f"#{job_id} için akış kaynağı bulunamadı.")
             db.update_queue_progress(job_id, "failed", error_msg="Kaynak akış bulunamadı")
@@ -2300,6 +2303,7 @@ class DiziBotManager:
                         fb_url = fb.get("url", "")
                         if fb_url and fb_url not in tested_urls:
                             candidates.append(fb)
+                    candidates = Downloader.sort_candidates(candidates)
 
             if not uploaded_ok and not db.is_job_cancelled(job_id):
                 db.update_queue_progress(job_id, "failed", error_msg="Tüm alternatif akışlar başarısız oldu")

@@ -299,6 +299,29 @@ class Downloader:
         return flat
 
     @classmethod
+    def sort_candidates(cls, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Aday akış listesini en yüksek öncelikten (özellikle Türkçe Dublaj) en düşüğe sıralar."""
+        all_plugins = cls.get_all_plugin_names()
+        def dublaj_priority_key(c):
+            p = c.get("plugin", "")
+            rel = float(c.get("relevance", 100.0))
+            is_tr = cls.is_candidate_tr_dublaj(c)
+            is_fast_master = p in ["DizipalX", "SineWix", "RecTV", "Dizipal", "DiziMom", "Dizi65", "FilmModu", "FullHDFilmizlesene", "HDMovie8"]
+            
+            # 1. Öncelik: Kesin İçerik Doğruluğu (Relevance). 100% eşleşen içerik asla farklı diziyle ezilemez!
+            score = int(rel * 10000)
+            if is_tr:
+                score += 5000  # Dublaj daima ilk sırada denenmeli (+5000 puan)
+            if is_fast_master:
+                score += 200
+                
+            p_idx = all_plugins.index(p) if p in all_plugins else 999
+            return (-score, p_idx)
+
+        candidates.sort(key=dublaj_priority_key)
+        return candidates
+
+    @classmethod
     async def find_all_candidate_streams(cls, query_title: str, target_s: int, target_e: int) -> List[Dict[str, Any]]:
         """DarkBox eklentilerinde arama yapar ve hedef sezon/bölüm (veya film) için tüm alternatif akışları toplar."""
         candidates = []
@@ -413,27 +436,7 @@ class Downloader:
             if isinstance(r, list):
                 candidates.extend(r)
 
-        all_plugins = cls.get_all_plugin_names()
-
-        # Doğruluk (Relevance) birincil, Dublaj ve Hızlı Kaynak ikincil önceliktedir
-        def dublaj_priority_key(c):
-            p = c.get("plugin", "")
-            rel = float(c.get("relevance", 100.0))
-            is_tr = cls.is_candidate_tr_dublaj(c)
-            is_fast_master = p in ["DizipalX", "SineWix", "RecTV", "Dizipal", "DiziMom", "Dizi65", "FilmModu", "FullHDFilmizlesene", "HDMovie8"]
-            
-            # 1. Öncelik: Kesin İçerik Doğruluğu (Relevance). 100% eşleşen içerik asla farklı diziyle ezilemez!
-            score = int(rel * 10000)
-            if is_tr:
-                score += 1000
-            if is_fast_master:
-                score += 200
-                
-            p_idx = all_plugins.index(p) if p in all_plugins else 999
-            return (-score, p_idx)
-
-        candidates.sort(key=dublaj_priority_key)
-        return candidates
+        return cls.sort_candidates(candidates)
 
     @classmethod
     def is_candidate_tr_dublaj(cls, cand: Dict[str, Any], is_native_turkish: bool = False) -> bool:
