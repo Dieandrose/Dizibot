@@ -46,6 +46,12 @@ DarkBox eklenti ekosistemindeki 50+ kaynağı (DizipalX, SineWix, RecTV, Vizyona
 - **Eksik Bölüm Tamamlama (`/kontrol <dizi>`):** Dizinin eklentilerdeki bölümleri ile gruptaki yüklemeleri karşılaştırır ve eksik kalan bölümleri sıraya alır.
 - **Grup İstek Sistemi (`/istek <içerik>`):** Üye istekleri yöneticilere `[✅ Onayla]` / `[❌ Reddet]` butonlarıyla iletilir; yöneticiler talep ettiğinde doğrudan kuyruğa eklenir.
 
+### 9. 📡 Otonom Güncel Akış Takipçisi (DizipalX & Dizipal3 Feed Tracker Daemon)
+- **Periyodik Akış Taraması:** DiziBot arka plan motoru her 15 dakikada bir otomatik olarak **DizipalX** (`/yeni-eklenen-bolumler`) ve **Dizipal3** (`/yeni-eklenen-bolumler`) güncel yayın sayfalarını tarar.
+- **Kategori & Konu Eşleştirme:** Yeni çıkan bölümler taranırken Telegram süper grubundaki mevcut forum konuları (`topics` tablosu) ile başlık karşılaştırması yapılır; yalnızca grupta aktif kategorisi olan içerikler filtrelenir.
+- **Mükerrerlik ve Kuyruk Denetimi:** Bölüm grupta daha önce paylaşılmışsa veya aktif indirme kuyruğundaysa atlanır.
+- **Sıfır Müdahale ile Yükleme:** Tespit edilen yeni bölümler yüksek öncelikle kuyruğa aktarılır; Gigabit hızında indirilip altyazı/dublaj ve PTS senkronu sağlanarak doğrudan ilgili forum konusuna (`message_thread_id`) yüklenir.
+
 ---
 
 ## 💻 Komut Referansı
