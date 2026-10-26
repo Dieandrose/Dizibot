@@ -145,7 +145,11 @@ class Downloader:
                 t_w = t_c.split()
                 if q_w == t_w:
                     return 100.0
-                if t_c.startswith(q_c) or q_c.startswith(t_c):
+                # Kısa başlıklarda (1-2 kelime: Lost, From, You, Dark) alt küme veya ön ek eşleşmesi yasaktır!
+                # 'LOST' aramasında 'LOST10' veya 'The Lost One' gibi alakasız yapımların seçilmesini engelle
+                if len(q_w) <= 2:
+                    score = 0.0
+                elif t_c.startswith(q_c) or q_c.startswith(t_c):
                     score = 92.0
                 elif all(w in t_w for w in q_w) or all(w in q_w for w in t_w):
                     score = 85.0
