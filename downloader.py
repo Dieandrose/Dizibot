@@ -769,7 +769,7 @@ class Downloader:
                     if hr.status_code == 200 and (hr.text.lstrip().startswith("#EXTM3U") or hr.text.lstrip().startswith("#EXT-X")):
                         resp = hr
                         stream_url = local_proxy_target
-                        current_proxy = None
+                        current_proxy = "socks5://127.0.0.1:4000"
             except Exception as h_err:
                 logger.debug(f"Yerel DarkBox video proxy erişim hatası: {h_err}")
 
@@ -879,7 +879,8 @@ class Downloader:
             # Segmentleri ve Varsa AES-128 Şifre Anahtarını Çıkar
             async def get_segments_and_key(url: str):
                 try:
-                    r = await session.get(url, headers=headers, timeout=10.0)
+                    s_to_use = direct_session if ("127.0.0.1" in url or "localhost" in url) else session
+                    r = await s_to_use.get(url, headers=headers, timeout=10.0)
                     if r.status_code != 200 or not r.text or (not r.text.lstrip().startswith("#EXTM3U") and not r.text.lstrip().startswith("#EXT-X")):
                         return [], None, None
                     m_lines = [ln.strip() for ln in r.text.splitlines() if ln.strip()]
@@ -894,7 +895,8 @@ class Downloader:
                             if m_method and m_method.group(1) == "AES-128" and m_uri:
                                 key_url = safe_urljoin(url, m_uri.group(1))
                                 try:
-                                    rk = await session.get(key_url, headers=headers, timeout=8.0)
+                                    k_sess = direct_session if ("127.0.0.1" in key_url or "localhost" in key_url) else session
+                                    rk = await k_sess.get(key_url, headers=headers, timeout=8.0)
                                     if rk.status_code == 200 and len(rk.content) == 16:
                                         key_bytes = rk.content
                                         if m_iv:
@@ -1019,19 +1021,32 @@ class Downloader:
                                 url_to_try = urllib.parse.urlunparse(orig_parsed._replace(netloc=last_working_netloc))
 
                             res = None
-                            # 1. Önce doğrudan gigabit hat ile çekmeyi dene (Media CDN'leri IP engeli uygulamaz, 25-50 MB/s verir)
-                            try:
-                                res = await direct_session.get(url_to_try, headers=headers, timeout=12.0)
-                            except Exception:
-                                res = None
-
-                            # 2. Doğrudan hat başarısız olursa veya proxy gerekiyorsa session (WARP/Config) ile dene
-                            if not res or res.status_code != 200 or not is_valid_chunk(res.content):
-                                if current_proxy:
+                            if "127.0.0.1" in url_to_try or "localhost" in url_to_try:
+                                try:
+                                    res = await direct_session.get(url_to_try, headers=headers, timeout=15.0)
+                                except Exception:
+                                    res = None
+                            else:
+                                is_warp_host = any(h in orig_parsed.netloc for h in ("playhls", "dplayer", "dosyaload"))
+                                if is_warp_host and current_proxy:
                                     try:
                                         res = await session.get(url_to_try, headers=headers, timeout=15.0)
                                     except Exception:
                                         res = None
+                                else:
+                                    # 1. Önce doğrudan gigabit hat ile çekmeyi dene (Media CDN'leri IP engeli uygulamaz, 25-50 MB/s verir)
+                                    try:
+                                        res = await direct_session.get(url_to_try, headers=headers, timeout=6.0)
+                                    except Exception:
+                                        res = None
+
+                                    # 2. Doğrudan hat başarısız olursa veya proxy gerekiyorsa session (WARP/Config) ile dene
+                                    if not res or res.status_code != 200 or not is_valid_chunk(res.content):
+                                        if current_proxy:
+                                            try:
+                                                res = await session.get(url_to_try, headers=headers, timeout=15.0)
+                                            except Exception:
+                                                res = None
 
                             if res and res.status_code == 200 and is_valid_chunk(res.content):
                                 done_all_chunks += 1
