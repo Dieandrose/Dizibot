@@ -717,6 +717,7 @@ class Downloader:
         custom_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         referer_url = stream_url
         use_warp = False
+        orig_proxy_path = stream_url if (stream_url.startswith("/proxy/") or "proxy/video?url=" in stream_url) else None
         if stream_url.startswith("/proxy/") or "proxy/video?url=" in stream_url or "proxy/iframe?url=" in stream_url:
             parsed_proxy = urllib.parse.urlparse(stream_url)
             qs = urllib.parse.parse_qs(parsed_proxy.query)
@@ -757,6 +758,20 @@ class Downloader:
                         break
             except Exception as e:
                 logger.debug(f"HLS Playlist erişim testi ({try_proxy}): {e}")
+
+        # Fallback: Doğrudan çekim 404/başarısız olduysa ve akış DarkBox proxy'si içeriyorsa yerel 3311 proxy'sini kullan
+        if not resp and orig_proxy_path:
+            local_proxy_target = orig_proxy_path if orig_proxy_path.startswith("http") else f"http://127.0.0.1:3311{orig_proxy_path}"
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=15, verify=False) as h_sess:
+                    hr = await h_sess.get(local_proxy_target)
+                    if hr.status_code == 200 and (hr.text.lstrip().startswith("#EXTM3U") or hr.text.lstrip().startswith("#EXT-X")):
+                        resp = hr
+                        stream_url = local_proxy_target
+                        current_proxy = None
+            except Exception as h_err:
+                logger.debug(f"Yerel DarkBox video proxy erişim hatası: {h_err}")
 
         if not resp:
             logger.warning(f"HLS Playlist indirilemedi veya geçersiz (200 dönmedi): {stream_url}")
