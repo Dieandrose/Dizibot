@@ -310,13 +310,16 @@ class Downloader:
             p = c.get("plugin", "")
             rel = float(c.get("relevance", 100.0))
             is_tr = cls.is_candidate_tr_dublaj(c)
-            is_fast_master = p in ["DizipalX", "SineWix", "RecTV", "Dizipal", "DiziMom", "Dizi65", "FilmModu", "FullHDFilmizlesene", "HDMovie8"]
+            is_native_cdn = p in ["DizipalX", "Dizipal", "DizifilmLife", "Dizi65", "RecTV", "Hdizipal", "Diziroll", "Selcukflix", "FilmModu", "FullHDFilmizlesene"]
+            is_fast_master = p in ["SineWix", "DiziMom", "HDMovie8"]
             
             # 1. Öncelik: Kesin İçerik Doğruluğu (Relevance). 100% eşleşen içerik asla farklı diziyle ezilemez!
             score = int(rel * 10000)
             if is_tr:
                 score += 5000  # Dublaj daima ilk sırada denenmeli (+5000 puan)
-            if is_fast_master:
+            if is_native_cdn:
+                score += 800   # Yüksek hızlı statik CDN akışlarına mutlak öncelik (+800 puan)
+            elif is_fast_master:
                 score += 200
                 
             p_idx = all_plugins.index(p) if p in all_plugins else 999
@@ -719,9 +722,11 @@ class Downloader:
     ) -> Dict[str, Any]:
         """HLS akışını video + Türkçe/Orijinal ses kanalları ve açılıp-kapanabilir Türkçe altyazı (Soft-Sub) ile indirir."""
         custom_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        if "izle.darkbox.com.tr:9443" in stream_url:
+            stream_url = stream_url.replace("https://izle.darkbox.com.tr:9443", "http://127.0.0.1:3311")
         referer_url = stream_url
         use_warp = False
-        orig_proxy_path = stream_url if (stream_url.startswith("/proxy/") or "proxy/video?url=" in stream_url) else None
+        orig_proxy_path = stream_url if (stream_url.startswith("/proxy/") or "proxy/video?url=" in stream_url or "proxy/sinewix" in stream_url or "127.0.0.1:3311/proxy" in stream_url) else None
         if stream_url.startswith("/proxy/") or "proxy/video?url=" in stream_url or "proxy/iframe?url=" in stream_url:
             parsed_proxy = urllib.parse.urlparse(stream_url)
             qs = urllib.parse.parse_qs(parsed_proxy.query)
@@ -742,7 +747,8 @@ class Downloader:
         origin_header = f"{parsed_ref.scheme}://{parsed_ref.netloc}" if parsed_ref.netloc else ""
         headers = {
             "User-Agent": custom_ua,
-            "Referer": referer_url
+            "Referer": referer_url,
+            "X-DiziBot": "1"
         }
         if origin_header:
             headers["Origin"] = origin_header
@@ -987,7 +993,7 @@ class Downloader:
                 completed_chunks = {}
                 next_write_idx = 0
                 missing_chunks_count = 0
-                MAX_WINDOW = 60
+                MAX_WINDOW = 120
                 dl_failed = False
 
                 async def worker():
@@ -1025,6 +1031,8 @@ class Downloader:
                                 url_to_try = urllib.parse.urlunparse(orig_parsed._replace(netloc=last_working_netloc))
 
                             res = None
+                            if "izle.darkbox.com.tr:9443" in url_to_try:
+                                url_to_try = url_to_try.replace("https://izle.darkbox.com.tr:9443", "http://127.0.0.1:3311")
                             if "127.0.0.1" in url_to_try or "localhost" in url_to_try:
                                 try:
                                     res = await direct_session.get(url_to_try, headers=headers, timeout=15.0)
@@ -1106,7 +1114,7 @@ class Downloader:
                         q.task_done()
 
                 # 25 işçi çalıştır (CPU'yu kilitlemeyen sabit havuz)
-                num_workers = 25
+                num_workers = 30
                 worker_tasks = [asyncio.create_task(worker()) for _ in range(num_workers)]
 
                 with open(dest_file, "wb") as f_out:
