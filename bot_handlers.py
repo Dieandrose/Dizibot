@@ -25,8 +25,11 @@ from pyrogram.types import (
     InlineQuery,
     InlineQueryResultArticle,
     InputTextMessageContent,
-    ForceReply
+    ForceReply,
+    WebAppInfo,
+    MenuButtonWebApp
 )
+from uploader_patch import apply_parallel_uploader_patch
 
 from config import config, TEMP_DIR
 from database import db
@@ -56,6 +59,26 @@ SEARCH_CACHE: Dict[str, List[Any]] = {}
 
 # Canlı indirme ve Telegram yükleme takip haritası
 LIVE_TRANSFERS: Dict[int, Dict[str, Any]] = {}
+_last_status_sync_time = 0.0
+
+def _sync_live_transfers_to_disk():
+    global _last_status_sync_time
+    now = time.time()
+    if now - _last_status_sync_time < 0.6:
+        return
+    _last_status_sync_time = now
+    try:
+        status_file = Path("/root/dizibot/data/live_status.json")
+        temp_file = Path("/root/dizibot/data/live_status.tmp")
+        data = {
+            "updated_at": now,
+            "transfers": {str(k): v for k, v in LIVE_TRANSFERS.items()}
+        }
+        with open(temp_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        temp_file.replace(status_file)
+    except Exception:
+        pass
 
 # Aktif çalışan asyncio görevleri (İptal yönetimi için)
 ACTIVE_TASKS: Dict[int, asyncio.Task] = {}
@@ -98,10 +121,28 @@ class DiziBotManager:
             bot_token=config.bot_token,
             proxy=proxy_dict
         )
+        try:
+            apply_parallel_uploader_patch(self.app)
+        except Exception as up_err:
+            logger.warning(f"Paralel uploader yüklenirken hata: {up_err}")
         self._topic_lock = asyncio.Lock()
         self.bot_username = None
         self._register_handlers()
         self.is_processing_queue = False
+
+    def _preempt_low_priority_jobs_if_needed(self):
+        """Kullanıcı VIP talebi (öncelik 10) geldiğinde çalışan düşük öncelikli (priority <= 3) işleri duraklatıp kuyruğa alır."""
+        try:
+            for j_id, task in list(ACTIVE_TASKS.items()):
+                item = db.get_queue_item(j_id)
+                if item and (item.get("priority") or 0) <= 3:
+                    logger.info(f"⚡ [QoS Preemption]: VIP kullanıcı talebi geldi. Düşük öncelikli iş #{j_id} ({item.get('title')}) duraklatılarak kuyruğa geri alınıyor.")
+                    task.cancel()
+                    with db._get_conn() as conn:
+                        conn.cursor().execute("UPDATE download_queue SET status = 'queued', progress = 0.0, updated_at = ? WHERE id = ?", (time.time(), j_id))
+                        conn.commit()
+        except Exception as e:
+            logger.debug(f"Preemption kontrol hatası: {e}")
 
     def render_search_keyboard(self, results: list, page: int = 0, query_title: str = "") -> tuple[str, InlineKeyboardMarkup]:
         """Arama sonuçlarını 10'arlı sayfalar halinde butonlu klavyeye dönüştürür."""
@@ -302,7 +343,11 @@ class DiziBotManager:
                     "🛡️ `/sentinel` ➔ DarkBox Eklenti Sağlık, Domain, Afiş & Stream Denetimi\n"
                 )
 
+            dashboard_url = f"{config.website_url.rstrip('/')}/dizibot/dashboard"
             start_markup = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🚀 Canlı Komuta Paneli (MiniApp)", web_app=WebAppInfo(url=dashboard_url))
+                ],
                 [
                     InlineKeyboardButton("🔍 Hızlı İçerik Ara", callback_data="btn_quick_search"),
                     InlineKeyboardButton("📊 Canlı Durum", callback_data="status_ref")
@@ -312,6 +357,14 @@ class DiziBotManager:
                     InlineKeyboardButton("👥 Telegram Grubumuz", url=config.invite_link)
                 ]
             ])
+
+            try:
+                await client.set_chat_menu_button(
+                    chat_id=message.chat.id,
+                    menu_button=MenuButtonWebApp(text="🚀 Panel", web_app=WebAppInfo(url=dashboard_url))
+                )
+            except Exception:
+                pass
 
             await message.reply_text(help_text, reply_markup=start_markup, disable_web_page_preview=True)
 
@@ -357,7 +410,8 @@ class DiziBotManager:
             title = " ".join(parts[1:-2])
             u_id = message.from_user.id if message.from_user else 0
 
-            job_id = db.add_to_queue(title=title, season=s_num, episode=e_num, priority=3, requested_by=u_id)
+            job_id = db.add_to_queue(title=title, season=s_num, episode=e_num, priority=10, requested_by=u_id)
+            self._preempt_low_priority_jobs_if_needed()
             await message.reply_text(f"✅ **{title} S{s_num:02d}E{e_num:02d}** indirme kuyruğuna eklendi! (İşlem ID: `{job_id}`)")
             asyncio.create_task(self.process_queue())
 
@@ -643,10 +697,12 @@ class DiziBotManager:
 
                             await message.reply_text(f"🚀 **Dark İsteği Başlatıldı:** '{clean_title}' dizisinin **TÜM SEZONLARI** ({len(seasons_set)} sezon, toplam {added} bölüm) onaysız olarak doğrudan kuyruğa alındı ve sırayla indirilip yükleniyor!")
                         else:
-                            job_id = db.add_to_queue(title=clean_title, season=0, episode=0, priority=3, requested_by=u_id)
+                            job_id = db.add_to_queue(title=clean_title, season=0, episode=0, priority=10, requested_by=u_id)
+                            self._preempt_low_priority_jobs_if_needed()
                             await message.reply_text(f"🚀 **Dark İsteği Başlatıldı:** '{clean_title}' (Film) onaysız olarak doğrudan kuyruğa alındı ve '🎬 Filmler' konusuna yükleniyor! (İşlem ID: `{job_id}`)")
                     else:
-                        job_id = db.add_to_queue(title=clean_title, season=s, episode=e, priority=3, requested_by=u_id)
+                        job_id = db.add_to_queue(title=clean_title, season=s, episode=e, priority=10, requested_by=u_id)
+                        self._preempt_low_priority_jobs_if_needed()
                         await message.reply_text(f"🚀 **Dark İsteği Başlatıldı:** '{clean_title} S{s:02d}E{e:02d}' onaysız olarak doğrudan kuyruğa alındı ve indirme başladı! (İşlem ID: `{job_id}`)")
 
                 asyncio.create_task(self.process_queue())
@@ -1048,7 +1104,8 @@ class DiziBotManager:
                     await _notify_admins_for_request(req_id, f"{title} (Film)", user_id, user_name, plugin)
                     return
 
-                job_id = db.add_to_queue(title=title, season=0, episode=0, plugin_name=plugin, item_url=url, priority=3, requested_by=user_id)
+                job_id = db.add_to_queue(title=title, season=0, episode=0, plugin_name=plugin, item_url=url, priority=10, requested_by=user_id)
+                self._preempt_low_priority_jobs_if_needed()
                 await query.answer("✅ Film kuyruğa eklendi!")
                 await query.edit_message_text(f"✅ **{title}** (Film) indirme kuyruğuna alındı! (İşlem ID: `{job_id}`)\n'🎬 Filmler' konusuna yüklenecektir.")
                 asyncio.create_task(self.process_queue())
@@ -1173,7 +1230,8 @@ class DiziBotManager:
                     await _notify_admins_for_request(req_id, f"{title} S{s_num:02d}E{e_num:02d}", user_id, user_name, plugin)
                     return
 
-                job_id = db.add_to_queue(title=title, season=s_num, episode=e_num, plugin_name=plugin, item_url=url, priority=3, requested_by=user_id)
+                job_id = db.add_to_queue(title=title, season=s_num, episode=e_num, plugin_name=plugin, item_url=url, priority=10, requested_by=user_id)
+                self._preempt_low_priority_jobs_if_needed()
                 await query.answer("✅ Kuyruğa eklendi!")
                 await query.edit_message_text(f"✅ **{title} S{s_num:02d}E{e_num:02d}** indirme kuyruğuna alındı! (İşlem ID: `{job_id}`)")
                 asyncio.create_task(self.process_queue())
@@ -1857,9 +1915,14 @@ class DiziBotManager:
     def get_system_status_report(self, user_id: int = 0) -> Tuple[str, InlineKeyboardMarkup]:
         is_admin = (user_id in config.admin_ids)
         active_jobs = db.get_active_queue()
+        dashboard_url = f"{config.website_url.rstrip('/')}/dizibot/dashboard"
+        webapp_btn = InlineKeyboardButton("📊 Canlı Komuta Paneli (MiniApp)", web_app=WebAppInfo(url=dashboard_url))
         if not active_jobs and not LIVE_TRANSFERS:
             text = "🟢 **Sistem Boşta.**\nAktif veya bekleyen indirme/yükleme işlemi yok."
-            markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Yenile", callback_data="status_ref")]])
+            markup = InlineKeyboardMarkup([
+                [webapp_btn],
+                [InlineKeyboardButton("🔄 Yenile", callback_data="status_ref")]
+            ])
             return text, markup
 
         text = "📊 **Canlı İndirme & Telegram Yükleme Durumu:**\n\n"
@@ -1977,6 +2040,10 @@ class DiziBotManager:
                 pass
 
         # Kontrol Butonları
+        dashboard_url = f"{config.website_url.rstrip('/')}/dizibot/dashboard"
+        webapp_btn = InlineKeyboardButton("📊 Canlı Komuta Paneli (MiniApp)", web_app=WebAppInfo(url=dashboard_url))
+        buttons.insert(0, [webapp_btn])
+
         ctrl_row = [InlineKeyboardButton("🔄 Canlı Yenile", callback_data="status_ref")]
         if is_admin and active_jobs:
             ctrl_row.insert(0, InlineKeyboardButton("🛑 Tüm Kuyruğu Temizle", callback_data="cancel_all"))
@@ -2159,6 +2226,7 @@ class DiziBotManager:
                         "updated_at": time.time()
                     }
                     db.update_queue_progress(job_id, "downloading", 0.73 if phase == "muxing" else pct * 0.7)
+                    _sync_live_transfers_to_disk()
 
                 # 1. Öncelik: Türkçe Ses / Dublaj Tespiti
                 is_dublaj = Downloader.is_candidate_tr_dublaj(cand, is_native_turkish=is_native_tr)
@@ -2314,6 +2382,7 @@ class DiziBotManager:
                                 "progress": pct,
                                 "updated_at": now
                             }
+                            _sync_live_transfers_to_disk()
                             if now - last_db_up >= 3.0 or current == total:
                                 last_db_up = now
                                 base_prog = 0.75 + ((part_idx - 1) / total_parts) * 0.25
@@ -2416,6 +2485,7 @@ class DiziBotManager:
         finally:
             ACTIVE_TASKS.pop(job_id, None)
             LIVE_TRANSFERS.pop(job_id, None)
+            _sync_live_transfers_to_disk()
             for p in TEMP_DIR.glob(f"job_{job_id}_*"):
                 try:
                     p.unlink(missing_ok=True)
