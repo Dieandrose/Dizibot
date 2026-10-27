@@ -108,7 +108,7 @@ class WatchlistTracker:
                 job_title = f"{clean_title} S{s_num:02d}E{e_num:02d}"
                 logger.info(f"⚡ Yeni Çıkan Bölüm Tespit Edildi: {job_title} (Konu ID: {topic_id}) -> Kuyruğa aktarılıyor [{plugin_name}]")
                 db.add_to_queue(
-                    title=job_title,
+                    title=clean_title,
                     season=s_num,
                     episode=e_num,
                     plugin_name=plugin_name,

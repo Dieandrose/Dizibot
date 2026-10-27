@@ -2045,15 +2045,11 @@ class DiziBotManager:
                                 "subtitles": l_subs
                             })
                 else:
-                    detail = await asyncio.wait_for(local_load_item(p_direct, url_direct), timeout=8)
-                    episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
-                    for ep in episodes:
-                        s_num = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
-                        e_num = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
-                        ep_url = ep.get("url", "") if isinstance(ep, dict) else getattr(ep, "url", "")
-                        if s_num == season and e_num == episode and ep_url:
-                            links = await asyncio.wait_for(local_load_links(p_direct, ep_url), timeout=8)
-                            for l in links:
+                    # 1. url_direct doğrudan bölüm URL'si olabilir (Tracker vb. tarafından eklenen)
+                    try:
+                        direct_ep_links = await asyncio.wait_for(local_load_links(p_direct, url_direct), timeout=6)
+                        if direct_ep_links:
+                            for l in direct_ep_links:
                                 l_name = l.get("name", "Akış") if isinstance(l, dict) else getattr(l, "name", "Akış")
                                 l_url = l.get("url", "") if isinstance(l, dict) else getattr(l, "url", "")
                                 l_subs = l.get("subtitles", []) if isinstance(l, dict) else getattr(l, "subtitles", [])
@@ -2062,10 +2058,36 @@ class DiziBotManager:
                                         "plugin": p_direct,
                                         "name": l_name,
                                         "url": l_url,
-                                        "ep_url": ep_url,
-                                        "title": ep.get("title", ""),
+                                        "ep_url": url_direct,
+                                        "title": clean_title,
                                         "subtitles": l_subs
                                     })
+                    except Exception:
+                        pass
+
+                    # 2. Doğrudan bölüm linki çıkmadıysa dizi ana sayfası kabul edip sezon/bölüm eşleştir
+                    if not candidates:
+                        detail = await asyncio.wait_for(local_load_item(p_direct, url_direct), timeout=8)
+                        episodes = detail.get("episodes", []) if isinstance(detail, dict) else getattr(detail, "episodes", [])
+                        for ep in episodes:
+                            s_num = ep.get("season", 1) if isinstance(ep, dict) else getattr(ep, "season", 1)
+                            e_num = ep.get("episode", 1) if isinstance(ep, dict) else getattr(ep, "episode", 1)
+                            ep_url = ep.get("url", "") if isinstance(ep, dict) else getattr(ep, "url", "")
+                            if s_num == season and e_num == episode and ep_url:
+                                links = await asyncio.wait_for(local_load_links(p_direct, ep_url), timeout=8)
+                                for l in links:
+                                    l_name = l.get("name", "Akış") if isinstance(l, dict) else getattr(l, "name", "Akış")
+                                    l_url = l.get("url", "") if isinstance(l, dict) else getattr(l, "url", "")
+                                    l_subs = l.get("subtitles", []) if isinstance(l, dict) else getattr(l, "subtitles", [])
+                                    if l_url:
+                                        candidates.append({
+                                            "plugin": p_direct,
+                                            "name": l_name,
+                                            "url": l_url,
+                                            "ep_url": ep_url,
+                                            "title": ep.get("title", ""),
+                                            "subtitles": l_subs
+                                        })
             except Exception as direct_err:
                 logger.debug(f"Doğrudan kaynak çözme hatası ({p_direct}): {direct_err}")
 
