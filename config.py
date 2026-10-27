@@ -45,7 +45,7 @@ class Config:
         self.website_url: str = "https://izle.darkbox.com.tr:9443"  # Web Sitesi
         self.check_interval_tracker: int = 900  # 15 dakika
         self.max_file_size_bytes: int = int(1950 * 1024 * 1024)  # 1.95 GB
-        self.max_concurrent_workers: int = 1  # Sıralı ve hatasız yükleme için tekil işlem
+        self.max_concurrent_workers: int = 2  # Çift eşzamanlı indirme ve pipelined yükleme
         self.min_free_disk_gb: float = 3.0  # Minimum boş disk alanı
         self.plugins_priority: List[str] = [
             "Darkboxx", "Dizipal", "DizipalX", "Hdizipal", "Dizi65", "Dizirella", "Diziyou", "Dizilab", "Dizigom", "Diziroll", "RecTV", "SineWix", 
@@ -88,5 +88,6 @@ class Config:
         self.invite_link = os.environ.get("TG_INVITE_LINK") or env_vars.get("TG_INVITE_LINK") or "https://t.me/+_gKDymkpjtZmMzg8"
         self.website_url = os.environ.get("WEB_SITE_URL") or env_vars.get("WEB_SITE_URL") or "https://izle.darkbox.com.tr:9443"
         self.check_interval_tracker = int(os.environ.get("TRACKER_INTERVAL") or env_vars.get("TRACKER_INTERVAL") or 900)
+        self.max_concurrent_workers = int(os.environ.get("MAX_CONCURRENT_WORKERS") or env_vars.get("MAX_CONCURRENT_WORKERS") or 2)
 
 config = Config()

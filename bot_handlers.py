@@ -2581,36 +2581,41 @@ class DiziBotManager:
         return total_avail, total_up, queued_count, missing_eps
 
     async def process_queue(self):
-        """Kuyruktaki işleri çoklu eşzamanlı işçi havuzuyla (multi-worker) işler."""
+        """Kuyruktaki işleri çoklu eşzamanlı işçi havuzuyla (çift indirme / multi-worker) işler."""
         if self.is_processing_queue:
             return
 
         self.is_processing_queue = True
-        sem = asyncio.Semaphore(config.max_concurrent_workers)
+        logger.info(f"🚀 Kuyruk işleme havuzu başlatıldı ({config.max_concurrent_workers} eşzamanlı işçi).")
 
-        async def _worker():
+        async def _worker(worker_id: int):
+            idle_ticks = 0
             while True:
-                job = None
-                async with sem:
-                    job = db.get_next_queue_item()
-                    if not job:
-                        break
-                    job_id = job.get("id")
-                    job_task = asyncio.create_task(self._process_single_job(job))
-                    ACTIVE_TASKS[job_id] = job_task
-                    try:
-                        await job_task
-                    except asyncio.CancelledError:
-                        logger.info(f"🛑 İşlem #{job_id} görevi iptal edildi.")
-                        db.cancel_queue_item(job_id)
-                    except Exception as e:
-                        logger.error(f"İşleme hatası (Job {job_id}): {e}")
-                    finally:
-                        ACTIVE_TASKS.pop(job_id, None)
-                await asyncio.sleep(1)
+                job = db.get_next_queue_item()
+                if not job:
+                    idle_ticks += 1
+                    # Diğer işçi çalışıyorsa veya yeni iş gelme ihtimaline karşı 4 saniye bekle
+                    if ACTIVE_TASKS and idle_ticks < 4:
+                        await asyncio.sleep(1.0)
+                        continue
+                    break
+
+                idle_ticks = 0
+                job_id = job.get("id")
+                job_task = asyncio.create_task(self._process_single_job(job))
+                ACTIVE_TASKS[job_id] = job_task
+                try:
+                    await job_task
+                except asyncio.CancelledError:
+                    logger.info(f"🛑 [Worker {worker_id}] İşlem #{job_id} iptal edildi.")
+                except Exception as e:
+                    logger.error(f"[Worker {worker_id}] İşleme hatası (Job {job_id}): {e}")
+                finally:
+                    ACTIVE_TASKS.pop(job_id, None)
+                await asyncio.sleep(0.5)
 
         try:
-            workers = [_worker() for _ in range(config.max_concurrent_workers)]
+            workers = [_worker(i) for i in range(config.max_concurrent_workers)]
             await asyncio.gather(*workers)
         finally:
             self.is_processing_queue = False
