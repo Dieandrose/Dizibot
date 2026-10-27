@@ -58,15 +58,16 @@ async def main():
     # Watchlist Tracker'ı Arka Planda Başlat
     tracker_task = asyncio.create_task(tracker.run_loop())
     
-    # Kuyruk Dinleyicisini Başlat
+    # Kuyruk Dinleyicisini Başlat (Çift Slot Kontrolü)
+    from bot_handlers import ACTIVE_TASKS
     async def queue_worker():
         while True:
             try:
-                if not bot_manager.is_processing_queue and db.has_pending_jobs():
+                if len(ACTIVE_TASKS) < config.max_concurrent_workers and db.has_pending_jobs():
                     await bot_manager.process_queue()
             except Exception as e:
                 logger.error(f"Kuyruk worker hatası: {e}")
-            await asyncio.sleep(4)
+            await asyncio.sleep(2)
 
     queue_task = asyncio.create_task(queue_worker())
 

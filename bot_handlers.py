@@ -130,6 +130,7 @@ class DiziBotManager:
         self.bot_username = None
         self._register_handlers()
         self.is_processing_queue = False
+        self._is_dispatching = False
 
     def _preempt_low_priority_jobs_if_needed(self):
         """Kullanıcı VIP talebi (öncelik 10) geldiğinde çalışan düşük öncelikli (priority <= 3) işleri duraklatıp kuyruğa alır."""
@@ -2547,6 +2548,8 @@ class DiziBotManager:
                     p.unlink(missing_ok=True)
                 except Exception:
                     pass
+            # Boşalan slota anında yeni iş çek
+            asyncio.create_task(self.process_queue())
 
     async def _auto_heal_hook(self, series_title: str, season: int):
         """Yükleme tamamlandıktan sonra arka planda eksik bölüm var mı kontrol eder ve kuyruğa alır."""
@@ -2613,41 +2616,27 @@ class DiziBotManager:
         return total_avail, total_up, queued_count, missing_eps
 
     async def process_queue(self):
-        """Kuyruktaki işleri çoklu eşzamanlı işçi havuzuyla (çift indirme / multi-worker) işler."""
-        if self.is_processing_queue:
+        """Kuyruktaki işleri çoklu eşzamanlı slot yöneticisiyle (çift indirme / multi-worker) işler."""
+        if self._is_dispatching:
             return
 
-        self.is_processing_queue = True
-        logger.info(f"🚀 Kuyruk işleme havuzu başlatıldı ({config.max_concurrent_workers} eşzamanlı işçi).")
-
-        async def _worker(worker_id: int):
-            idle_ticks = 0
-            while True:
+        self._is_dispatching = True
+        try:
+            while len(ACTIVE_TASKS) < config.max_concurrent_workers:
                 job = db.get_next_queue_item()
                 if not job:
-                    idle_ticks += 1
-                    # Diğer işçi çalışıyorsa veya yeni iş gelme ihtimaline karşı 4 saniye bekle
-                    if ACTIVE_TASKS and idle_ticks < 4:
-                        await asyncio.sleep(1.0)
-                        continue
                     break
-
-                idle_ticks = 0
                 job_id = job.get("id")
+                disp_title = job.get("title", "")
+                s = job.get("season", 0)
+                e = job.get("episode", 0)
+                if s and e:
+                    disp_title = f"{disp_title} S{s:02d}E{e:02d}"
+                elif s == 0 and e == 0:
+                    disp_title = f"{disp_title} (Film)"
+
+                logger.info(f"⚡ [Slot {len(ACTIVE_TASKS)+1}/{config.max_concurrent_workers}]: İş #{job_id} ({disp_title}) başlatılıyor.")
                 job_task = asyncio.create_task(self._process_single_job(job))
                 ACTIVE_TASKS[job_id] = job_task
-                try:
-                    await job_task
-                except asyncio.CancelledError:
-                    logger.info(f"🛑 [Worker {worker_id}] İşlem #{job_id} iptal edildi.")
-                except Exception as e:
-                    logger.error(f"[Worker {worker_id}] İşleme hatası (Job {job_id}): {e}")
-                finally:
-                    ACTIVE_TASKS.pop(job_id, None)
-                await asyncio.sleep(0.5)
-
-        try:
-            workers = [_worker(i) for i in range(config.max_concurrent_workers)]
-            await asyncio.gather(*workers)
         finally:
-            self.is_processing_queue = False
+            self._is_dispatching = False
