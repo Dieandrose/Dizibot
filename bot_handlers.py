@@ -2057,8 +2057,6 @@ class DiziBotManager:
                 temp_file = TEMP_DIR / f"job_{job_id}_{safe_title}_{'movie' if is_movie else f'S{season}E{episode}'}.mp4"
                 
                 def prog_cb(pct: float, done_seg: int = 0, tot_seg: int = 0, cur_mb: float = 0.0, tot_mb: float = 0.0, speed_mb: float = 0.0, phase: str = "downloading"):
-                    if db.is_job_cancelled(job_id):
-                        raise asyncio.CancelledError(f"İşlem #{job_id} iptal edildi")
                     LIVE_TRANSFERS[job_id] = {
                         "title": disp_title,
                         "plugin": p_name,

@@ -1092,11 +1092,11 @@ class Downloader:
                                             speed_mb=speed_mb, 
                                             phase="downloading"
                                         )
-                                    except TypeError:
+                                    except BaseException:
                                         try:
                                             progress_cb(frac, done_all_chunks, tot_all_chunks)
-                                        except Exception:
-                                            progress_cb(frac)
+                                        except BaseException:
+                                            pass
                                 break
                             else:
                                 await asyncio.sleep(0.3 + retry * 0.3)
@@ -1113,8 +1113,8 @@ class Downloader:
                         completed_chunks[idx] = chunk_data
                         q.task_done()
 
-                # 25 işçi çalıştır (CPU'yu kilitlemeyen sabit havuz)
-                num_workers = 30
+                # İşçi havuzu (çift akışta 15+15=30, tek akışta 25 - WARP SOCKS5 aşırı yüklenmesini önler)
+                num_workers = 15 if (audio_tr_segs and tmp_audio_tr_file) else 25
                 worker_tasks = [asyncio.create_task(worker()) for _ in range(num_workers)]
 
                 with open(dest_file, "wb") as f_out:
