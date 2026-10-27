@@ -732,7 +732,10 @@ class Downloader:
             qs = urllib.parse.parse_qs(parsed_proxy.query)
             if "force_proxy" in qs or qs.get("proxy", [""])[0] == "warp":
                 use_warp = True
-            if "url" in qs and qs["url"]:
+            if "force_proxy" in qs:
+                # Eklenti veya sunucu proxy'yi zorunlu kılmış (Cloudflare/Bot koruması) -> Doğrudan localhost proxy üzerinden çek!
+                stream_url = f"http://127.0.0.1:3311{parsed_proxy.path}?{parsed_proxy.query}"
+            elif "url" in qs and qs["url"]:
                 real_target = qs["url"][0]
                 referer_url = qs.get("referer", [real_target])[0]
                 if "user_agent" in qs and qs["user_agent"]:
@@ -753,12 +756,17 @@ class Downloader:
         if origin_header:
             headers["Origin"] = origin_header
 
-        active_proxy = "socks5://127.0.0.1:4000" if use_warp else (config.proxy or None)
+        if "127.0.0.1" in stream_url or "localhost" in stream_url:
+            proxies_to_try = [None]
+            current_proxy = None
+        else:
+            active_proxy = "socks5://127.0.0.1:4000" if use_warp else (config.proxy or None)
+            proxies_to_try = [active_proxy] if active_proxy else [None, "socks5://127.0.0.1:4000"]
+            current_proxy = active_proxy
 
         # Öncelik: Doğrudan Gigabit hat. Engel/Challenge olursa otomatik WARP fallback.
-        current_proxy = active_proxy
         resp = None
-        for try_proxy in ([active_proxy] if active_proxy else [None, "socks5://127.0.0.1:4000"]):
+        for try_proxy in proxies_to_try:
             try:
                 async with AsyncSession(impersonate="chrome124", proxy=try_proxy, timeout=12) as test_sess:
                     r = await test_sess.get(stream_url, headers=headers)
@@ -802,7 +810,11 @@ class Downloader:
             def safe_urljoin(base_url: str, rel_url: str) -> str:
                 if not rel_url:
                     return base_url
+                if rel_url.startswith("/proxy/") or rel_url.startswith("proxy/"):
+                    return f"http://127.0.0.1:3311/{rel_url.lstrip('/')}"
                 joined = urllib.parse.urljoin(base_url, rel_url)
+                if "/proxy/" in joined and not ("127.0.0.1" in joined or "localhost" in joined):
+                    joined = f"http://127.0.0.1:3311/proxy/{joined.split('/proxy/', 1)[1]}"
                 base_parsed = urllib.parse.urlparse(base_url)
                 joined_parsed = urllib.parse.urlparse(joined)
                 if base_parsed.query:
@@ -889,6 +901,10 @@ class Downloader:
             # Segmentleri ve Varsa AES-128 Şifre Anahtarını Çıkar
             async def get_segments_and_key(url: str):
                 try:
+                    if url.startswith("/proxy/"):
+                        url = f"http://127.0.0.1:3311{url}"
+                    elif "/proxy/" in url and not ("127.0.0.1" in url or "localhost" in url):
+                        url = f"http://127.0.0.1:3311/proxy/{url.split('/proxy/', 1)[1]}"
                     s_to_use = direct_session if ("127.0.0.1" in url or "localhost" in url) else session
                     r = await s_to_use.get(url, headers=headers, timeout=10.0)
                     if r.status_code != 200 or not r.text or (not r.text.lstrip().startswith("#EXTM3U") and not r.text.lstrip().startswith("#EXT-X")):
@@ -1031,6 +1047,10 @@ class Downloader:
                                 url_to_try = urllib.parse.urlunparse(orig_parsed._replace(netloc=last_working_netloc))
 
                             res = None
+                            if url_to_try.startswith("/proxy/"):
+                                url_to_try = f"http://127.0.0.1:3311{url_to_try}"
+                            elif "/proxy/" in url_to_try and not ("127.0.0.1" in url_to_try or "localhost" in url_to_try):
+                                url_to_try = f"http://127.0.0.1:3311/proxy/{url_to_try.split('/proxy/', 1)[1]}"
                             if "izle.darkbox.com.tr:9443" in url_to_try:
                                 url_to_try = url_to_try.replace("https://izle.darkbox.com.tr:9443", "http://127.0.0.1:3311")
                             if "127.0.0.1" in url_to_try or "localhost" in url_to_try:
