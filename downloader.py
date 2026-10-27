@@ -1143,6 +1143,8 @@ class Downloader:
                 num_workers = 15 if (audio_tr_segs and tmp_audio_tr_file) else 25
                 worker_tasks = [asyncio.create_task(worker()) for _ in range(num_workers)]
 
+                consecutive_empty_count = 0
+                eof_reached = False
                 with open(dest_file, "wb") as f_out:
                     while next_write_idx < total:
                         if cancel_check and cancel_check():
@@ -1155,19 +1157,43 @@ class Downloader:
                             c = completed_chunks.pop(next_write_idx)
                             if c:
                                 f_out.write(c)
+                                consecutive_empty_count = 0
                             else:
+                                consecutive_empty_count += 1
+                                # EOF tespiti: 10 parçadan fazla ardışık boş döndüyse ve dosya > 20 MB ise (SineWix remux vb.)
+                                if consecutive_empty_count >= 10 and next_write_idx > 40 and dest_file.stat().st_size > 20 * 1024 * 1024:
+                                    logger.info(f"ℹ️ {dest_file.name}: Akış sonuna ulaşıldı (EOF - {next_write_idx - 10}. parça). Kalan yapay parçalar atlanıyor.")
+                                    eof_reached = True
+                                    for t in worker_tasks:
+                                        t.cancel()
+                                    break
                                 missing_chunks_count += 1
                             next_write_idx += 1
                         else:
                             if dl_failed:
                                 break
                             if all(t.done() for t in worker_tasks) and next_write_idx not in completed_chunks:
+                                consecutive_empty_count += 1
+                                if consecutive_empty_count >= 10 and next_write_idx > 40 and dest_file.stat().st_size > 20 * 1024 * 1024:
+                                    logger.info(f"ℹ️ {dest_file.name}: Akış sonuna ulaşıldı (EOF - {next_write_idx - 10}. parça).")
+                                    eof_reached = True
+                                    break
                                 missing_chunks_count += 1
                                 next_write_idx += 1
                                 continue
                             await asyncio.sleep(0.005)
 
-                await q.join()
+                if eof_reached:
+                    while not q.empty():
+                        try:
+                            q.get_nowait()
+                            q.task_done()
+                        except Exception:
+                            break
+                    missing_chunks_count = 0
+                else:
+                    await q.join()
+
                 for t in worker_tasks:
                     if not t.done():
                         t.cancel()

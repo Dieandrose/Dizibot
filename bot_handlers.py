@@ -2069,11 +2069,20 @@ class DiziBotManager:
             except Exception as direct_err:
                 logger.debug(f"Doğrudan kaynak çözme hatası ({p_direct}): {direct_err}")
 
-        # Doğrudan seçilen eklentiden hiç aday çıkmadıysa, hemen fallback araması yap
-        if not candidates:
-            candidates = await Downloader.find_all_candidate_streams(clean_title, season, episode)
+        # Doğrudan seçilen eklentiden aday gelse bile, diğer eklentileri de tara
+        # Böylece Gigabit CDN sağlayıcıları (Dizipal, RecTV, DizifilmLife vb.) yavaş kaynakların (SineWix vb.)
+        # önüne (+800 puanla) geçerek indirmeyi saniyeler içinde tamamlar!
+        try:
+            all_cands = await Downloader.find_all_candidate_streams(clean_title, season, episode)
+            if all_cands:
+                existing_urls = {c.get("url") for c in candidates}
+                for ac in all_cands:
+                    if ac.get("url") not in existing_urls:
+                        candidates.append(ac)
+        except Exception as e:
+            logger.debug(f"Aday akış tarama hatası: {e}")
 
-        # Tüm adayları (doğrudan linkler ve fallback'ler dahil) Türkçe Dublaj önceliğine göre sırala
+        # Tüm adayları Türkçe Dublaj ve Gigabit CDN önceliğine göre sırala
         candidates = Downloader.sort_candidates(candidates)
 
         if not candidates:
