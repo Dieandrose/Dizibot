@@ -26,7 +26,7 @@ logger = logging.getLogger("DiziBot.ParallelUploader")
 
 class MediaSessionPool:
     """Telegram DC medya sunucularına kalıcı ve sıcak (warm) çoklu MTProto oturumu sağlar."""
-    def __init__(self, client: "pyrogram.Client", pool_size: int = 6):
+    def __init__(self, client: "pyrogram.Client", pool_size: int = 4):
         self.client = client
         self.pool_size = pool_size
         self.sessions: List[Session] = []
@@ -76,8 +76,8 @@ async def parallel_save_file(
     file_part: int = 0,
     progress: Callable = None,
     progress_args: tuple = (),
-    pool_size: int = 6,
-    in_flight_per_session: int = 2
+    pool_size: int = 4,
+    in_flight_per_session: int = 1
 ):
     """
     6 kalıcı MTProto oturumu ve her oturum için 2 in-flight pipelining ile
@@ -266,6 +266,6 @@ async def parallel_save_file(
 def apply_parallel_uploader_patch(client: "pyrogram.Client"):
     """Pyrogram istemcisine yüksek hızlı çok kanallı uploader metodunu bağlar."""
     client.save_file = lambda path, file_id=None, file_part=0, progress=None, progress_args=(): parallel_save_file(
-        client, path, file_id=file_id, file_part=file_part, progress=progress, progress_args=progress_args, pool_size=6, in_flight_per_session=2
+        client, path, file_id=file_id, file_part=file_part, progress=progress, progress_args=progress_args, pool_size=4, in_flight_per_session=1
     )
-    logger.info("⚡ 6 Oturum x 2 Pipelining (12 Kanallı) MTProto yükleyicisi başarıyla bağlandı.")
+    logger.info("⚡ 4 Paralel DC Oturumu (Zero-FloodWait) MTProto yükleyicisi başarıyla bağlandı.")
