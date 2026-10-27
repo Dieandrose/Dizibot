@@ -795,8 +795,10 @@ class Downloader:
             logger.warning(f"HLS Playlist indirilemedi veya geçersiz (200 dönmedi): {stream_url}")
             return {"success": False}
 
+        import httpx
         async with AsyncSession(impersonate="chrome124", proxy=current_proxy, timeout=60) as session, \
-                   AsyncSession(impersonate="chrome124", timeout=20) as direct_session:
+                   AsyncSession(impersonate="chrome124", timeout=20) as direct_session, \
+                   httpx.AsyncClient(limits=httpx.Limits(max_connections=80, max_keepalive_connections=40), timeout=15.0) as local_client:
 
             manifest_text = resp.text
             if not manifest_text.lstrip().startswith("#EXTM3U") and not manifest_text.lstrip().startswith("#EXT-X"):
@@ -1024,11 +1026,15 @@ class Downloader:
                             break
 
                         # Backpressure: Disk yazımı çok gerideyse bekle (RAM taşmasını önler)
+                        bp_wait = 0
                         while idx > next_write_idx + MAX_WINDOW and not dl_failed:
                             if cancel_check and cancel_check():
                                 dl_failed = True
                                 break
                             await asyncio.sleep(0.02)
+                            bp_wait += 1
+                            if bp_wait > 500: # 10 saniyeden fazla writer kilitliyse devam et
+                                break
 
                         if dl_failed:
                             q.task_done()
@@ -1055,7 +1061,7 @@ class Downloader:
                                 url_to_try = url_to_try.replace("https://izle.darkbox.com.tr:9443", "http://127.0.0.1:3311")
                             if "127.0.0.1" in url_to_try or "localhost" in url_to_try:
                                 try:
-                                    res = await direct_session.get(url_to_try, headers=headers, timeout=15.0)
+                                    res = await asyncio.wait_for(local_client.get(url_to_try, headers=headers), timeout=12.0)
                                 except Exception:
                                     res = None
                             else:
@@ -1155,6 +1161,10 @@ class Downloader:
                         else:
                             if dl_failed:
                                 break
+                            if all(t.done() for t in worker_tasks) and next_write_idx not in completed_chunks:
+                                missing_chunks_count += 1
+                                next_write_idx += 1
+                                continue
                             await asyncio.sleep(0.005)
 
                 await q.join()
