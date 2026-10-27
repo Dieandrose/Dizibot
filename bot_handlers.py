@@ -2094,13 +2094,23 @@ class DiziBotManager:
                         except Exception as sub_err:
                             logger.warning(f"OpenSubtitles arama hatası: {sub_err}")
 
+                _last_cancel_ts = 0.0
+                _cached_cancel = False
+                def safe_cancel_check():
+                    nonlocal _last_cancel_ts, _cached_cancel
+                    now = time.time()
+                    if now - _last_cancel_ts > 1.5:
+                        _last_cancel_ts = now
+                        _cached_cancel = db.is_job_cancelled(job_id)
+                    return _cached_cancel
+
                 dl_res = await Downloader.download_hls_stream(
                     stream_url, 
                     temp_file, 
                     progress_cb=prog_cb,
                     extra_subtitles=cand.get("subtitles"),
                     subtitle_path=sub_file,
-                    cancel_check=lambda: db.is_job_cancelled(job_id)
+                    cancel_check=safe_cancel_check
                 )
                 if not dl_res or not dl_res.get("success") or not temp_file.exists():
                     logger.warning(f"[{p_name}] İndirme başarısız oldu, sonraki kaynağa geçiliyor...")

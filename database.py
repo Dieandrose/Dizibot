@@ -397,10 +397,13 @@ class Database:
             return dict(row) if row else None
 
     def is_job_cancelled(self, job_id: int) -> bool:
-        item = self.get_queue_item(job_id)
-        if not item:
-            return True
-        return item.get("status") == "cancelled"
+        try:
+            item = self.get_queue_item(job_id)
+            if not item:
+                return False
+            return item.get("status") == "cancelled"
+        except Exception:
+            return False
 
     def cancel_all_queue(self) -> int:
         with self._get_conn() as conn:
