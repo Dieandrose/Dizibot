@@ -8,6 +8,7 @@ import os
 import re
 import sys
 import time
+import json
 import asyncio
 import logging
 import sqlite3
@@ -64,7 +65,7 @@ _last_status_sync_time = 0.0
 def _sync_live_transfers_to_disk():
     global _last_status_sync_time
     now = time.time()
-    if now - _last_status_sync_time < 0.6:
+    if now - _last_status_sync_time < 0.3:
         return
     _last_status_sync_time = now
     try:
@@ -2216,13 +2217,13 @@ class DiziBotManager:
                     LIVE_TRANSFERS[job_id] = {
                         "title": disp_title,
                         "plugin": p_name,
-                        "phase": phase,
-                        "progress": pct,
+                        "phase": "downloading" if phase != "muxing" else "muxing",
+                        "progress": 1.0 if phase == "muxing" else pct,
                         "current_seg": done_seg,
                         "total_seg": tot_seg,
-                        "cur_mb": cur_mb,
-                        "tot_mb": tot_mb,
-                        "speed_mb": speed_mb,
+                        "cur_mb": round(cur_mb, 1),
+                        "tot_mb": round(tot_mb, 1),
+                        "speed_mb": round(speed_mb, 2),
                         "updated_at": time.time()
                     }
                     db.update_queue_progress(job_id, "downloading", 0.73 if phase == "muxing" else pct * 0.7)
@@ -2352,13 +2353,19 @@ class DiziBotManager:
                         # Telegram'a Yükle (Canlı İlerleme Takibi)
                         LIVE_TRANSFERS[job_id] = {
                             "title": f"{disp_title}{part_tag}",
+                            "plugin": p_name,
                             "phase": "uploading",
                             "current": 0,
                             "total": part_fsize,
+                            "cur_mb": 0.0,
+                            "tot_mb": round(part_fsize / (1024 * 1024), 1),
                             "speed_mb": 0.0,
                             "progress": 0.0,
+                            "current_seg": 0,
+                            "total_seg": 0,
                             "updated_at": time.time()
                         }
+                        _sync_live_transfers_to_disk()
                         db.update_queue_progress(job_id, "uploading", 0.75 + ((part_idx - 1) / total_parts) * 0.25)
                         logger.info(f"Telegram Konusuna Yükleniyor: '{disp_title}'{part_tag} (Topic: {topic_id})")
 
@@ -2387,11 +2394,16 @@ class DiziBotManager:
                                 last_speed_bytes = current
                             LIVE_TRANSFERS[job_id] = {
                                 "title": f"{disp_title}{part_tag}",
+                                "plugin": p_name,
                                 "phase": "uploading",
                                 "current": current,
                                 "total": total,
-                                "speed_mb": speed_mb,
+                                "cur_mb": round(current / (1024 * 1024), 1),
+                                "tot_mb": round(total / (1024 * 1024), 1),
+                                "speed_mb": round(speed_mb, 2),
                                 "progress": pct,
+                                "current_seg": 0,
+                                "total_seg": 0,
                                 "updated_at": now
                             }
                             _sync_live_transfers_to_disk()
