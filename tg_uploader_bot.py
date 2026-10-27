@@ -61,7 +61,7 @@ SESSION_DIR.mkdir(parents=True, exist_ok=True)
 MAX_ALLOWED_FILE_SIZE_BYTES = int(1950 * 1024 * 1024)  # 1950 MB (2GB Telegram sınırının hemen altı)
 
 CORE_SEARCH_PLUGINS = [
-    "DizipalX", "SineWix", "Hdizipal", "Dizimom", "RecTV", 
+    "DizipalX", "Ddizi", "SineWix", "Hdizipal", "Dizimom", "RecTV", 
     "FilmIzleCH", "FullHDFilmizlesene", "FilmMakinesi", "HDFilmCehennemi", 
     "Selcukflix", "JetFilmIzle", "Medya", "DarkTV", "SuperTV", "NetTV"
 ]

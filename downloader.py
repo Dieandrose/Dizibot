@@ -172,10 +172,10 @@ class Downloader:
 
         # En popüler / öncelikli dizi ve film eklentileri
         top_priority = [
-            "Darkboxx", "Dizipal", "DizipalX", "Hdizipal", "Dizi65", "Dizirella", "Diziyou", "Dizilab", "Dizigom", "Diziroll", "RecTV", "SineWix", 
+            "Darkboxx", "Dizipal", "DizipalX", "Ddizi", "Hdizipal", "Dizi65", "Dizirella", "Diziyou", "Dizilab", "Dizigom", "Diziroll", "RecTV", "SineWix", 
             "FilmMakinesi", "FullHDFilmizlesene", "HDFilmCehennemi", "FilmModu", 
             "JetFilmIzle", "Selcukflix", "SetFilmizle", "WebteIzle",
-            "Dizimom", "Dizimia", "Dizibal", "Dizibol", "Ddizi", "DiziKorea",
+            "Dizimom", "Dizimia", "Dizibal", "Dizibol", "DiziKorea",
             "DiziIzleClick", "DizifilmLife", "FilmCenneti", "FilmIzleCH", "Filmhane",
             "FullHDFilmIzle", "HDFilmDelisi", "HDFilmUS", "RoketDizi", "SineMerkez",
             "Sinezy", "TvFilmIzle", "WFilmIzle", "WebDramaTurkey", "ZxcPrime", "Aether", "MeowTV"
@@ -232,6 +232,12 @@ class Downloader:
         main_part = re.sub(r'[\(\[].*?[\)\]]', '', clean_q).strip()
         if main_part and main_part not in queries_to_search:
             queries_to_search.append(main_part)
+
+        # Sezon / bölüm / izle kalıplarını temizleyen saf dizi başlığı varyantı
+        pure_title = re.sub(r'(?i)\b(?:\d+\s*\.?\s*(?:sezon|bölüm|bolum|bölümü|bolumu)|s\d+e\d+|s\d+|e\d+|izle|full|hd|dizi|film)\b', '', main_part).strip()
+        pure_title = re.sub(r'\s+', ' ', pure_title).strip(' -:')
+        if pure_title and len(pure_title) >= 3 and pure_title not in queries_to_search:
+            queries_to_search.append(pure_title)
 
         async def _search_plugin_q(p: str, q_term: str):
             async with sem:
