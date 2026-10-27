@@ -2362,17 +2362,29 @@ class DiziBotManager:
                         db.update_queue_progress(job_id, "uploading", 0.75 + ((part_idx - 1) / total_parts) * 0.25)
                         logger.info(f"Telegram Konusuna Yükleniyor: '{disp_title}'{part_tag} (Topic: {topic_id})")
 
-                        upload_start = time.time()
+                        upload_start = 0.0
+                        last_speed_time = 0.0
+                        last_speed_bytes = 0
+                        speed_mb = 0.0
                         last_db_up = 0.0
 
                         async def upload_prog(current: int, total: int):
                             if db.is_job_cancelled(job_id):
                                 raise asyncio.CancelledError(f"İşlem #{job_id} iptal edildi")
-                            nonlocal last_db_up
+                            nonlocal last_db_up, upload_start, last_speed_time, last_speed_bytes, speed_mb
                             now = time.time()
+                            if upload_start == 0.0:
+                                upload_start = now
+                                last_speed_time = now
+                                last_speed_bytes = current
+
                             pct = current / total if total > 0 else 0.0
-                            elapsed = max(0.1, now - upload_start)
-                            speed_mb = (current / (1024 * 1024)) / elapsed
+                            dt = now - last_speed_time
+                            if dt >= 0.8 or current == total:
+                                delta_bytes = current - last_speed_bytes
+                                speed_mb = (delta_bytes / (1024 * 1024)) / max(0.1, dt)
+                                last_speed_time = now
+                                last_speed_bytes = current
                             LIVE_TRANSFERS[job_id] = {
                                 "title": f"{disp_title}{part_tag}",
                                 "phase": "uploading",

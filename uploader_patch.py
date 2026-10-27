@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-DiziBot Parallel MTProto Uploader
-=================================
-Pyrogram'ın tek soketli varsayılan yükleyicisi yerine 4 bağımsız MTProto oturumu (Session)
-üzerinden paralel chunk yüklemesi gerçekleştirir. Telegram DC medya sunucularına
-4 paralel TCP akışı açarak yükleme hızını 8 MB/s'den 35-45 MB/s'ye çıkarır.
+DiziBot High-Speed MTProto Parallel Uploader (v2)
+================================================
+- 6 Kalıcı MTProto Media Session Havuzu (Warm Session Pool)
+- Her soket için 2 In-Flight Pipelining (Toplam 12 Eşzamanlı Parça İletimi)
+- 512 KB parça tamponlama ve sıfır gecikmeli TCP akış doygunluğu
+- Anlık kayar pencereli hız ölçümü (Instantaneous Speed Calculation)
 """
 
 import os
@@ -15,13 +16,58 @@ import asyncio
 import logging
 from hashlib import md5
 from pathlib import PurePath
-from typing import Union, BinaryIO, Callable
+from typing import Union, BinaryIO, Callable, Optional, List
 
 import pyrogram
 from pyrogram import raw, StopTransmission
 from pyrogram.session import Session
 
 logger = logging.getLogger("DiziBot.ParallelUploader")
+
+class MediaSessionPool:
+    """Telegram DC medya sunucularına kalıcı ve sıcak (warm) çoklu MTProto oturumu sağlar."""
+    def __init__(self, client: "pyrogram.Client", pool_size: int = 6):
+        self.client = client
+        self.pool_size = pool_size
+        self.sessions: List[Session] = []
+        self._lock = asyncio.Lock()
+        self._started = False
+
+    async def get_sessions(self) -> List[Session]:
+        async with self._lock:
+            if not self._started or len(self.sessions) != self.pool_size:
+                # Önceki oturumları kapat
+                for s in self.sessions:
+                    try:
+                        await s.stop()
+                    except Exception:
+                        pass
+                self.sessions.clear()
+
+                dc_id = await self.client.storage.dc_id()
+                auth_key = await self.client.storage.auth_key()
+                test_mode = await self.client.storage.test_mode()
+
+                self.sessions = [
+                    Session(self.client, dc_id, auth_key, test_mode, is_media=True)
+                    for _ in range(self.pool_size)
+                ]
+                # Tüm oturumları paralel başlat
+                await asyncio.gather(*[s.start() for s in self.sessions], return_exceptions=True)
+                self._started = True
+                logger.info(f"⚡ MTProto Medya Havuzu Hazır: {len(self.sessions)} kalıcı oturum bağlandı (DC{dc_id}).")
+
+            return self.sessions
+
+    async def close(self):
+        async with self._lock:
+            if self._started:
+                await asyncio.gather(*[s.stop() for s in self.sessions], return_exceptions=True)
+                self.sessions.clear()
+                self._started = False
+
+
+_POOL_INSTANCE: Optional[MediaSessionPool] = None
 
 async def parallel_save_file(
     client: "pyrogram.Client",
@@ -30,14 +76,19 @@ async def parallel_save_file(
     file_part: int = 0,
     progress: Callable = None,
     progress_args: tuple = (),
-    max_workers: int = 4
+    pool_size: int = 6,
+    in_flight_per_session: int = 2
 ):
-    """4 paralel MTProto Session üzerinden yüksek hızlı chunk yükleyicisi."""
+    """
+    6 kalıcı MTProto oturumu ve her oturum için 2 in-flight pipelining ile
+    aynı anda 12 parçayı (6 MB) eşzamanlı Telegram'a basarak tam hat doygunluğuna ulaşır.
+    """
+    global _POOL_INSTANCE
     async with client.save_file_semaphore:
         if path is None:
             return None
 
-        part_size = 512 * 1024  # 512 KB parçalar (Telegram standardı)
+        part_size = 512 * 1024  # 512 KB parçalar
 
         if isinstance(path, (str, PurePath)):
             fp = open(path, "rb")
@@ -60,22 +111,62 @@ async def parallel_save_file(
             raise ValueError("File size equals to 0 B")
 
         file_total_parts = int(math.ceil(file_size / part_size))
-        is_big = file_size > 10 * 1024 * 1024  # 10 MB üstü SaveBigFilePart kullanır
+        is_big = file_size > 10 * 1024 * 1024  # 10 MB üstü SaveBigFilePart
         file_id = file_id or client.rnd_id()
         md5_sum = md5() if not is_big else None
 
-        # 10 MB altındaki küçük dosyalarda tek oturum yeterli; büyük dosyalarda 4 paralel oturum
-        workers_count = max_workers if is_big else 1
-        dc_id = await client.storage.dc_id()
-        auth_key = await client.storage.auth_key()
-        test_mode = await client.storage.test_mode()
+        # 10 MB altındaki küçük dosyalarda tek iş yeterli
+        if not is_big:
+            session = Session(
+                client, await client.storage.dc_id(), await client.storage.auth_key(),
+                await client.storage.test_mode(), is_media=True
+            )
+            await session.start()
+            try:
+                curr_part = file_part
+                fp.seek(part_size * curr_part)
+                while True:
+                    chunk = fp.read(part_size)
+                    if not chunk:
+                        break
+                    md5_sum.update(chunk)
+                    rpc = raw.functions.upload.SaveFilePart(
+                        file_id=file_id,
+                        file_part=curr_part,
+                        bytes=chunk
+                    )
+                    await session.invoke(rpc)
+                    curr_part += 1
+            finally:
+                await session.stop()
+                if isinstance(path, (str, PurePath)):
+                    fp.close()
 
-        sessions = [
-            Session(client, dc_id, auth_key, test_mode, is_media=True)
-            for _ in range(workers_count)
-        ]
+            return raw.types.InputFile(
+                id=file_id,
+                parts=file_total_parts,
+                name=file_name,
+                md5_checksum="".join([hex(i)[2:].zfill(2) for i in md5_sum.digest()])
+            )
 
-        queue = asyncio.Queue(maxsize=workers_count * 2)
+        # Büyük dosyalarda havuzdan oturumları al
+        if _POOL_INSTANCE is None:
+            _POOL_INSTANCE = MediaSessionPool(client, pool_size=pool_size)
+
+        try:
+            sessions = await _POOL_INSTANCE.get_sessions()
+        except Exception as e:
+            logger.warning(f"Session havuzu başlatılamadı, tekil oturuma dönülüyor: {e}")
+            dc_id = await client.storage.dc_id()
+            auth_key = await client.storage.auth_key()
+            test_mode = await client.storage.test_mode()
+            sessions = [Session(client, dc_id, auth_key, test_mode, is_media=True)]
+            await sessions[0].start()
+
+        num_sessions = len(sessions)
+        total_workers = num_sessions * in_flight_per_session
+        queue = asyncio.Queue(maxsize=total_workers * 2)
+
         uploaded_bytes = 0
         prog_lock = asyncio.Lock()
         upload_error = None
@@ -93,32 +184,28 @@ async def parallel_save_file(
                     continue
 
                 part_idx, chunk_bytes = item
-                if is_big:
-                    rpc = raw.functions.upload.SaveBigFilePart(
-                        file_id=file_id,
-                        file_part=part_idx,
-                        file_total_parts=file_total_parts,
-                        bytes=chunk_bytes
-                    )
-                else:
-                    rpc = raw.functions.upload.SaveFilePart(
-                        file_id=file_id,
-                        file_part=part_idx,
-                        bytes=chunk_bytes
-                    )
+                rpc = raw.functions.upload.SaveBigFilePart(
+                    file_id=file_id,
+                    file_part=part_idx,
+                    file_total_parts=file_total_parts,
+                    bytes=chunk_bytes
+                )
 
                 success = False
-                for attempt in range(4):
+                for attempt in range(5):
                     try:
                         await sess.invoke(rpc)
                         success = True
                         break
+                    except StopTransmission as st:
+                        upload_error = st
+                        break
                     except Exception as err:
-                        if attempt == 3:
-                            logger.error(f"Part #{part_idx} yükleme hatası: {err}")
+                        if attempt == 4:
+                            logger.error(f"Part #{part_idx} yükleme hatası (tükendi): {err}")
                             upload_error = err
                             break
-                        await asyncio.sleep(0.4 * (attempt + 1))
+                        await asyncio.sleep(0.3 * (attempt + 1))
 
                 queue.task_done()
 
@@ -136,11 +223,11 @@ async def parallel_save_file(
                     except Exception:
                         pass
 
-        # Paralel oturumları başlat
+        # Her oturuma in_flight_per_session kadar worker görevi bağla
+        worker_tasks = []
         for s in sessions:
-            await s.start()
-
-        worker_tasks = [client.loop.create_task(worker(s)) for s in sessions]
+            for _ in range(in_flight_per_session):
+                worker_tasks.append(client.loop.create_task(worker(s)))
 
         try:
             curr_part = file_part
@@ -154,9 +241,6 @@ async def parallel_save_file(
                 if not chunk:
                     break
 
-                if not is_big:
-                    md5_sum.update(chunk)
-
                 await queue.put((curr_part, chunk))
                 curr_part += 1
 
@@ -169,32 +253,19 @@ async def parallel_save_file(
             for _ in worker_tasks:
                 await queue.put(None)
             await asyncio.gather(*worker_tasks, return_exceptions=True)
-            for s in sessions:
-                try:
-                    await s.stop()
-                except Exception:
-                    pass
             if isinstance(path, (str, PurePath)):
                 fp.close()
 
-        if is_big:
-            return raw.types.InputFileBig(
-                id=file_id,
-                parts=file_total_parts,
-                name=file_name
-            )
-        else:
-            return raw.types.InputFile(
-                id=file_id,
-                parts=file_total_parts,
-                name=file_name,
-                md5_checksum="".join([hex(i)[2:].zfill(2) for i in md5_sum.digest()]) if md5_sum else ""
-            )
+        return raw.types.InputFileBig(
+            id=file_id,
+            parts=file_total_parts,
+            name=file_name
+        )
 
 
 def apply_parallel_uploader_patch(client: "pyrogram.Client"):
-    """Pyrogram istemcisine 4 kanallı paralel uploader metodunu bağlar."""
+    """Pyrogram istemcisine yüksek hızlı çok kanallı uploader metodunu bağlar."""
     client.save_file = lambda path, file_id=None, file_part=0, progress=None, progress_args=(): parallel_save_file(
-        client, path, file_id=file_id, file_part=file_part, progress=progress, progress_args=progress_args, max_workers=4
+        client, path, file_id=file_id, file_part=file_part, progress=progress, progress_args=progress_args, pool_size=6, in_flight_per_session=2
     )
-    logger.info("⚡ 4 kanallı paralel MTProto yükleyicisi başarıyla bağlandı.")
+    logger.info("⚡ 6 Oturum x 2 Pipelining (12 Kanallı) MTProto yükleyicisi başarıyla bağlandı.")
