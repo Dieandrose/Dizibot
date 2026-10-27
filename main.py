@@ -63,7 +63,7 @@ async def main():
     async def queue_worker():
         while True:
             try:
-                if len(ACTIVE_TASKS) < config.max_concurrent_workers and db.has_pending_jobs():
+                if bot_manager.can_dispatch_next_worker() and db.has_pending_jobs():
                     await bot_manager.process_queue()
             except Exception as e:
                 logger.error(f"Kuyruk worker hatası: {e}")

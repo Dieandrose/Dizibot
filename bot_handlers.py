@@ -131,6 +131,7 @@ class DiziBotManager:
         self._register_handlers()
         self.is_processing_queue = False
         self._is_dispatching = False
+        self._stagger_released: Dict[int, bool] = {}
 
     def _preempt_low_priority_jobs_if_needed(self):
         """Kullanıcı VIP talebi (öncelik 10) geldiğinde çalışan düşük öncelikli (priority <= 3) işleri duraklatıp kuyruğa alır."""
@@ -2230,6 +2231,12 @@ class DiziBotManager:
                     db.update_queue_progress(job_id, "downloading", 0.73 if phase == "muxing" else pct * 0.7)
                     _sync_live_transfers_to_disk()
 
+                    # İndirme %15 eşiğine ulaştığında sıradaki bekleyen işin indirmesini başlat
+                    if (pct >= 0.15 or phase == "muxing") and not self._stagger_released.get(job_id):
+                        self._stagger_released[job_id] = True
+                        logger.info(f"⚡ [Stagger Dispatch]: İş #{job_id} ({disp_title}) %15 indirme eşiğine ulaştı ({pct*100:.1f}%). Kuyruktaki sıradaki iş tetikleniyor.")
+                        asyncio.create_task(self.process_queue())
+
                 # 1. Öncelik: Türkçe Ses / Dublaj Tespiti
                 is_dublaj = Downloader.is_candidate_tr_dublaj(cand, is_native_turkish=is_native_tr)
 
@@ -2539,6 +2546,7 @@ class DiziBotManager:
                 except Exception:
                     pass
         finally:
+            self._stagger_released.pop(job_id, None)
             ACTIVE_TASKS.pop(job_id, None)
             LIVE_TRANSFERS.pop(job_id, None)
             _sync_live_transfers_to_disk()
@@ -2615,14 +2623,35 @@ class DiziBotManager:
         total_up = total_avail - len(missing_eps)
         return total_avail, total_up, queued_count, missing_eps
 
+    def can_dispatch_next_worker(self) -> bool:
+        """İkinci/sonraki işin yalnızca mevcut aktif indirmeler en az %15'e ulaştığında başlamasını sağlar."""
+        if len(ACTIVE_TASKS) >= config.max_concurrent_workers:
+            return False
+        if not ACTIVE_TASKS:
+            return True
+        # Eğer aktif çalışan iş varsa, herhangi bir iş henüz %15 indirmeye ulaşmadıysa sıradaki işi beklet
+        for j_id in list(ACTIVE_TASKS.keys()):
+            t_info = LIVE_TRANSFERS.get(j_id)
+            if not t_info:
+                # İndirme henüz başlamamış (kaynak bulma, altyazı veya başlatma aşamasında)
+                return False
+            phase = t_info.get("phase", "")
+            if phase == "downloading":
+                prog = float(t_info.get("progress") or 0.0)
+                if prog < 0.15:
+                    return False
+            elif phase in ("queued", "init"):
+                return False
+        return True
+
     async def process_queue(self):
-        """Kuyruktaki işleri çoklu eşzamanlı slot yöneticisiyle (çift indirme / multi-worker) işler."""
+        """Kuyruktaki işleri kademeli eşzamanlı slot yöneticisiyle (%15 stagger kuralı) işler."""
         if self._is_dispatching:
             return
 
         self._is_dispatching = True
         try:
-            while len(ACTIVE_TASKS) < config.max_concurrent_workers:
+            while self.can_dispatch_next_worker():
                 job = db.get_next_queue_item()
                 if not job:
                     break
