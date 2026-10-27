@@ -2260,13 +2260,29 @@ class DiziBotManager:
                         _cached_cancel = db.is_job_cancelled(job_id)
                     return _cached_cancel
 
+                pause_signal = Path(f"/root/dizibot/data/job_{job_id}.pause")
+                async def safe_pause_check():
+                    if pause_signal.exists() or db.is_job_paused(job_id):
+                        if LIVE_TRANSFERS.get(job_id):
+                            LIVE_TRANSFERS[job_id]["phase"] = "paused"
+                            LIVE_TRANSFERS[job_id]["speed_mb"] = 0.0
+                            _sync_live_transfers_to_disk()
+                        while pause_signal.exists() or db.is_job_paused(job_id):
+                            if db.is_job_cancelled(job_id):
+                                break
+                            await asyncio.sleep(0.5)
+                        if LIVE_TRANSFERS.get(job_id) and not db.is_job_cancelled(job_id):
+                            LIVE_TRANSFERS[job_id]["phase"] = "downloading"
+                            _sync_live_transfers_to_disk()
+
                 dl_res = await Downloader.download_hls_stream(
                     stream_url, 
                     temp_file, 
                     progress_cb=prog_cb,
                     extra_subtitles=cand.get("subtitles"),
                     subtitle_path=sub_file,
-                    cancel_check=safe_cancel_check
+                    cancel_check=safe_cancel_check,
+                    pause_check=safe_pause_check
                 )
                 if not dl_res or not dl_res.get("success") or not temp_file.exists():
                     logger.warning(f"[{p_name}] İndirme başarısız oldu, sonraki kaynağa geçiliyor...")
@@ -2378,6 +2394,21 @@ class DiziBotManager:
                         async def upload_prog(current: int, total: int):
                             if db.is_job_cancelled(job_id):
                                 raise asyncio.CancelledError(f"İşlem #{job_id} iptal edildi")
+
+                            pause_signal = Path(f"/root/dizibot/data/job_{job_id}.pause")
+                            if pause_signal.exists() or db.is_job_paused(job_id):
+                                if LIVE_TRANSFERS.get(job_id):
+                                    LIVE_TRANSFERS[job_id]["phase"] = "paused"
+                                    LIVE_TRANSFERS[job_id]["speed_mb"] = 0.0
+                                    _sync_live_transfers_to_disk()
+                                while pause_signal.exists() or db.is_job_paused(job_id):
+                                    if db.is_job_cancelled(job_id):
+                                        raise asyncio.CancelledError(f"İşlem #{job_id} iptal edildi")
+                                    await asyncio.sleep(0.5)
+                                if LIVE_TRANSFERS.get(job_id) and not db.is_job_cancelled(job_id):
+                                    LIVE_TRANSFERS[job_id]["phase"] = "uploading"
+                                    _sync_live_transfers_to_disk()
+
                             nonlocal last_db_up, upload_start, last_speed_time, last_speed_bytes, speed_mb
                             now = time.time()
                             if upload_start == 0.0:
@@ -2510,6 +2541,7 @@ class DiziBotManager:
             ACTIVE_TASKS.pop(job_id, None)
             LIVE_TRANSFERS.pop(job_id, None)
             _sync_live_transfers_to_disk()
+            Path(f"/root/dizibot/data/job_{job_id}.pause").unlink(missing_ok=True)
             for p in TEMP_DIR.glob(f"job_{job_id}_*"):
                 try:
                     p.unlink(missing_ok=True)

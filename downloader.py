@@ -718,7 +718,8 @@ class Downloader:
         progress_cb: Optional[Callable[..., None]] = None,
         extra_subtitles: Optional[List[Dict[str, Any]]] = None,
         subtitle_path: Optional[Path] = None,
-        cancel_check: Optional[Callable[[], bool]] = None
+        cancel_check: Optional[Callable[[], bool]] = None,
+        pause_check: Optional[Callable[[], Any]] = None
     ) -> Dict[str, Any]:
         """HLS akışını video + Türkçe/Orijinal ses kanalları ve açılıp-kapanabilir Türkçe altyazı (Soft-Sub) ile indirir."""
         custom_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -1014,9 +1015,16 @@ class Downloader:
                 MAX_WINDOW = 120
                 dl_failed = False
 
+                async def _do_pause():
+                    if pause_check:
+                        res = pause_check()
+                        if asyncio.iscoroutine(res):
+                            await res
+
                 async def worker():
                     nonlocal done_all_chunks, downloaded_bytes, last_working_netloc, dl_failed
                     while not q.empty() and not dl_failed:
+                        await _do_pause()
                         if cancel_check and cancel_check():
                             dl_failed = True
                             break
@@ -1147,6 +1155,7 @@ class Downloader:
                 eof_reached = False
                 with open(dest_file, "wb") as f_out:
                     while next_write_idx < total:
+                        await _do_pause()
                         if cancel_check and cancel_check():
                             dl_failed = True
                             for t in worker_tasks:

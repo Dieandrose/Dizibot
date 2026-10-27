@@ -405,6 +405,15 @@ class Database:
         except Exception:
             return False
 
+    def is_job_paused(self, job_id: int) -> bool:
+        try:
+            item = self.get_queue_item(job_id)
+            if not item:
+                return False
+            return item.get("status") == "paused"
+        except Exception:
+            return False
+
     def cancel_all_queue(self) -> int:
         with self._get_conn() as conn:
             cur = conn.cursor()
