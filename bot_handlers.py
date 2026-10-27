@@ -1404,8 +1404,33 @@ class DiziBotManager:
                 except Exception:
                     pass
 
-            # 8. Buton ile Tekil İptal
+            # 8. Buton ile Tekil İptal Ön Onayı (Confirmation Dialog)
             elif data.startswith("cancel_job:"):
+                if user_id not in config.admin_ids:
+                    await query.answer("⚠️ İptal yetkisi sadece yöneticidedir.", show_alert=True)
+                    return
+                c_id = int(data.split(":")[1])
+                t_info = LIVE_TRANSFERS.get(c_id, {})
+                title = t_info.get("title") or f"İşlem #{c_id}"
+                confirm_text = (
+                    f"⚠️ **İPTAL ONAYI**\n\n"
+                    f"🎬 **{title}** (`#{c_id}`)\n\n"
+                    f"Bu indirme işlemini durdurup kuyruktan iptal etmek istediğinize emin misiniz?\n"
+                    f"_(İndirilen geçici video parçaları silinecektir.)_"
+                )
+                confirm_markup = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton(f"🛑 Evet, #{c_id} İptal Et", callback_data=f"confirm_cancel:{c_id}"),
+                        InlineKeyboardButton("🔙 Vazgeç", callback_data="refresh_status")
+                    ]
+                ])
+                try:
+                    await query.edit_message_text(confirm_text, reply_markup=confirm_markup)
+                except Exception:
+                    pass
+
+            # 8.1 Onaylanmış Kesin İptal
+            elif data.startswith("confirm_cancel:"):
                 if user_id not in config.admin_ids:
                     await query.answer("⚠️ İptal yetkisi sadece yöneticidedir.", show_alert=True)
                     return
@@ -1420,7 +1445,7 @@ class DiziBotManager:
                             p.unlink(missing_ok=True)
                         except Exception:
                             pass
-                    await query.answer(f"🛑 İşlem #{c_id} iptal edildi.", show_alert=True)
+                    await query.answer(f"🛑 İşlem #{c_id} başarıyla iptal edildi.", show_alert=True)
                 else:
                     await query.answer(f"⚠️ İşlem #{c_id} zaten tamamlanmış veya bulunamadı.", show_alert=True)
                 
@@ -1430,8 +1455,30 @@ class DiziBotManager:
                 except Exception:
                     pass
 
-            # 9. Buton ile Tüm Kuyruğu Temizleme
+            # 9. Buton ile Tüm Kuyruğu Temizleme Ön Onayı
             elif data == "cancel_all":
+                if user_id not in config.admin_ids:
+                    await query.answer("⚠️ İptal yetkisi sadece yöneticidedir.", show_alert=True)
+                    return
+                active_count = len(db.get_active_queue())
+                confirm_text = (
+                    f"⚠️ **TÜM KUYRUĞU TEMİZLEME ONAYI**\n\n"
+                    f"Aktif veya sırada bekleyen toplam **{active_count}** adet işlem bulunuyor.\n\n"
+                    f"Tüm çalışan indirmeleri durdurmak ve kuyruğu tamamen silmek istediğinize emin misiniz?"
+                )
+                confirm_markup = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("🛑 Evet, Tümünü Temizle", callback_data="confirm_cancel_all"),
+                        InlineKeyboardButton("🔙 Vazgeç", callback_data="refresh_status")
+                    ]
+                ])
+                try:
+                    await query.edit_message_text(confirm_text, reply_markup=confirm_markup)
+                except Exception:
+                    pass
+
+            # 9.1 Onaylanmış Tüm Kuyruğu Temizleme
+            elif data == "confirm_cancel_all":
                 if user_id not in config.admin_ids:
                     await query.answer("⚠️ İptal yetkisi sadece yöneticidedir.", show_alert=True)
                     return
