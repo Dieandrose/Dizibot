@@ -1989,6 +1989,17 @@ class DiziBotManager:
         try:
             total, used, free = shutil.disk_usage(TEMP_DIR)
             free_gb = free / (1024**3)
+            # /tmp altındaki 30 dakikadan eski sinewix remux parçalarını temizle
+            remux_dir = Path("/tmp/darkbox_sinewix_remux")
+            if remux_dir.exists():
+                now_ts = time.time()
+                for sub in remux_dir.iterdir():
+                    try:
+                        if sub.is_dir() and (now_ts - sub.stat().st_mtime > 1800):
+                            shutil.rmtree(sub, ignore_errors=True)
+                    except Exception:
+                        pass
+
             if free_gb < config.min_free_disk_gb:
                 logger.warning(f"Düşük disk alanı ({free_gb:.1f} GB), eski temp dosyaları temizleniyor...")
                 for f in TEMP_DIR.glob("*"):
@@ -2405,6 +2416,11 @@ class DiziBotManager:
         finally:
             ACTIVE_TASKS.pop(job_id, None)
             LIVE_TRANSFERS.pop(job_id, None)
+            for p in TEMP_DIR.glob(f"job_{job_id}_*"):
+                try:
+                    p.unlink(missing_ok=True)
+                except Exception:
+                    pass
 
     async def _auto_heal_hook(self, series_title: str, season: int):
         """Yükleme tamamlandıktan sonra arka planda eksik bölüm var mı kontrol eder ve kuyruğa alır."""
