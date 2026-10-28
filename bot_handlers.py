@@ -2106,16 +2106,9 @@ class DiziBotManager:
         db.update_queue_progress(job_id, "downloading", 0.0)
         self._check_disk_space()
 
-        # 1. Konu ID'sini ve Yerli Dil Durumunu Paralel Çöz (Hızlı Başlama)
-        try:
-            topic_id, is_native_tr = await asyncio.gather(
-                self.get_or_create_series_topic(clean_title, is_movie=is_movie),
-                Downloader.detect_native_turkish(clean_title)
-            )
-        except Exception as gather_err:
-            logger.debug(f"Konu/Dil tespit hatası: {gather_err}")
-            topic_id = await self.get_or_create_series_topic(clean_title, is_movie=is_movie)
-            is_native_tr = False
+        # 1. Konu ID'sini Bul / Aç (Filmler tekil '🎬 Filmler' konusuna, Diziler kendi dizisi konusuna)
+        topic_id = await self.get_or_create_series_topic(clean_title, is_movie=is_movie)
+        is_native_tr = await Downloader.detect_native_turkish(clean_title)
 
         # 2. Aday Akışları Bul (Önce seçilen plugin ve link, ardından fallback zinciri)
         candidates = []
@@ -2186,18 +2179,18 @@ class DiziBotManager:
             except Exception as direct_err:
                 logger.debug(f"Doğrudan kaynak çözme hatası ({p_direct}): {direct_err}")
 
-        # Yalnızca doğrudan eklentiden aday gelmediyse diğer 40 eklentiyi tara (Anında Başlama)
-        # Doğrudan kaynaktan link geldiyse 50 saniyelik tarama beklemeden indirme 1 saniyede başlar!
-        if not candidates:
-            logger.info(f"⚡ Seçilen eklentiden ({p_direct}) doğrudan akış çıkmadı, alternatif eklentiler taranıyor: {clean_title}")
-            try:
-                all_cands = await Downloader.find_all_candidate_streams(clean_title, season, episode)
-                if all_cands:
-                    candidates.extend(all_cands)
-            except Exception as e:
-                logger.debug(f"Aday akış tarama hatası: {e}")
-        else:
-            logger.info(f"⚡ Doğrudan eklentiden ({p_direct}) {len(candidates)} adet akış anında bulundu, indirmeye geçiliyor.")
+        # Doğrudan seçilen eklentiden aday gelse bile, diğer eklentileri de tara
+        # Böylece Gigabit CDN sağlayıcıları (Dizipal, RecTV, DizifilmLife vb.) yavaş kaynakların (SineWix vb.)
+        # önüne (+800 puanla) geçerek indirmeyi saniyeler içinde tamamlar!
+        try:
+            all_cands = await Downloader.find_all_candidate_streams(clean_title, season, episode)
+            if all_cands:
+                existing_urls = {c.get("url") for c in candidates}
+                for ac in all_cands:
+                    if ac.get("url") not in existing_urls:
+                        candidates.append(ac)
+        except Exception as e:
+            logger.debug(f"Aday akış tarama hatası: {e}")
 
         # Tüm adayları Türkçe Dublaj ve Gigabit CDN önceliğine göre sırala
         candidates = Downloader.sort_candidates(candidates)
