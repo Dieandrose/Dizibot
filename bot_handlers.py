@@ -132,6 +132,7 @@ class DiziBotManager:
         self.is_processing_queue = False
         self._is_dispatching = False
         self._stagger_released: Dict[int, bool] = {}
+        self.waiting_admin_messages: Dict[int, Dict[str, Any]] = {}
 
     def _preempt_low_priority_jobs_if_needed(self):
         """Kullanıcı VIP talebi (öncelik 10) geldiğinde çalışan düşük öncelikli (priority <= 3) işleri duraklatıp kuyruğa alır."""
@@ -451,6 +452,11 @@ class DiziBotManager:
         # 6. /iptal <id> veya /iptal hepsi
         @self.app.on_message(filters.command(["iptal", "cancel", "kuyruktemizle"]))
         async def cmd_cancel(client: Client, message: Message):
+            if message.from_user and message.from_user.id in self.waiting_admin_messages:
+                self.waiting_admin_messages.pop(message.from_user.id, None)
+                await message.reply_text("❌ Mesaj gönderme işlemi iptal edildi.")
+                return
+
             if message.from_user and message.from_user.id not in config.admin_ids:
                 await message.reply_text("⚠️ Bu komut sadece yöneticiler içindir.")
                 return
@@ -615,6 +621,42 @@ class DiziBotManager:
                 logger.info(f"📌 Telegram Konusu Otomatik Yakalandı & Kaydedildi: '{t_name}' -> Topic ID: {t_id}")
 
         # 9. İstek Sistemi (/istek & /istekler)
+        @self.app.on_message(filters.command(["istekler", "requests"]))
+        async def cmd_istekler(client: Client, message: Message):
+            u_id = message.from_user.id if message.from_user else 0
+            if u_id not in config.admin_ids:
+                await message.reply_text("⚠️ Bu komut sadece yöneticiler içindir.")
+                return
+
+            pending = db.get_pending_requests()
+            if not pending:
+                await message.reply_text("🎉 **Bekleyen içerik isteği yok!** Tüm istekler onaylandı veya tamamlandı.")
+                return
+
+            await message.reply_text(f"📋 **Bekleyen {len(pending)} Adet İstek Bulunuyor:**")
+            for req in pending[:10]:
+                r_id = req["id"]
+                r_user = req.get("user_name", "Üye")
+                r_uid = req.get("user_id", 0)
+                r_query = req.get("query", "")
+
+                btn = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("✅ Onayla & Yükle", callback_data=f"req_app:{r_id}"),
+                        InlineKeyboardButton("❌ Reddet", callback_data=f"req_rej:{r_id}")
+                    ],
+                    [
+                        InlineKeyboardButton("💬 Üyeye Özel Mesaj Gönder", callback_data=f"req_msg:{r_id}")
+                    ]
+                ])
+                user_link = f"[{r_user}](tg://user?id={r_uid})" if r_uid else r_user
+                await message.reply_text(
+                    f"📌 **İstek `#{r_id}`**\n"
+                    f"👤 **İsteyen:** {user_link} (`{r_uid}`)\n"
+                    f"🎬 **İçerik:** `{r_query}`",
+                    reply_markup=btn
+                )
+
         @self.app.on_message(filters.command(["istek"]))
         async def cmd_istek(client: Client, message: Message):
             args = message.text.split(maxsplit=1)
@@ -722,24 +764,8 @@ class DiziBotManager:
             req_id = db.create_request(user_id=u_id, user_name=u_name, query=query)
             await message.reply_text(f"📩 İsteğiniz alındı! (İstek No: `#{req_id}`)\nYöneticiler onayladığında otomatik olarak konuya yüklenecektir.")
 
-            # Adminlere Onay Butonlu Bildirim Gönder
-            admin_btn = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("✅ Onayla & Yükle", callback_data=f"req_app:{req_id}"),
-                    InlineKeyboardButton("❌ Reddet", callback_data=f"req_rej:{req_id}")
-                ]
-            ])
-            admin_msg = (
-                f"📥 **Yeni İçerik İsteği Geldi!**\n\n"
-                f"👤 **İsteyen:** {u_name} (`{u_id}`)\n"
-                f"🎬 **İçerik:** `{query}`\n"
-                f"📌 **İstek No:** `#{req_id}`"
-            )
-            for a_id in config.admin_ids:
-                try:
-                    await self.app.send_message(chat_id=a_id, text=admin_msg, reply_markup=admin_btn)
-                except Exception as ex:
-                    logger.debug(f"Admin bildirim hatası ({a_id}): {ex}")
+            # Adminlere Onay ve Mesaj Butonlu Bildirim Gönder
+            await _notify_admins_for_request(req_id, query, u_id, u_name)
 
         # 9. Eksik Bölüm Kontrolü & Otomatik Tamamlama (/kontrol & /dogrula)
         @self.app.on_message(filters.command(["kontrol", "dogrula", "check"]))
@@ -783,20 +809,24 @@ class DiziBotManager:
                 [
                     InlineKeyboardButton("✅ Onayla & Yükle", callback_data=f"req_app:{req_id}"),
                     InlineKeyboardButton("❌ Reddet", callback_data=f"req_rej:{req_id}")
+                ],
+                [
+                    InlineKeyboardButton("💬 Üyeye Özel Mesaj Gönder", callback_data=f"req_msg:{req_id}")
                 ]
             ])
             src_info = f"\n🌐 **Seçilen Kaynak:** `{p_name}`" if p_name else ""
+            user_mention = f"[{u_name}](tg://user?id={u_id})" if u_id else u_name
             admin_msg = (
                 f"📥 **Yeni İçerik İsteği Geldi!**\n\n"
-                f"👤 **İsteyen:** {u_name} (`{u_id}`)\n"
+                f"👤 **İsteyen:** {user_mention} (`{u_id}`)\n"
                 f"🎬 **İçerik:** `{req_title}`{src_info}\n"
                 f"📌 **İstek No:** `#{req_id}`"
             )
             for adm_id in config.admin_ids:
                 try:
                     await self.app.send_message(chat_id=adm_id, text=admin_msg, reply_markup=admin_btn)
-                except Exception:
-                    pass
+                except Exception as ex:
+                    logger.debug(f"Admin bildirim hatası ({adm_id}): {ex}")
 
         # 10. DarkBox Sentinel & Eklenti Koruyucu Komutları
         @self.app.on_message(filters.command(["sentinel", "oto_tara", "doktor", "guardian"]))
@@ -879,10 +909,71 @@ class DiziBotManager:
             await message.reply_text(menu_text, reply_markup=menu_btn)
 
         # 11. Özel Sohbet Doğrudan Metin / Arama Yakalayıcı
-        @self.app.on_message(filters.private & filters.text & ~filters.command(["start", "yardim", "help", "ara", "search", "indir", "download", "durum", "status", "kuyruk", "queue", "iptal", "cancel", "kuyruktemizle", "takip", "takiplistesi", "takipbirak", "konubagla", "konu", "settopic", "konular", "topics", "konusil", "deltopic", "istek", "kontrol", "dogrula", "check", "sentinel", "oto_tara", "doktor", "guardian"]))
+        @self.app.on_message(filters.private & filters.text & ~filters.command(["start", "yardim", "help", "ara", "search", "indir", "download", "durum", "status", "kuyruk", "queue", "iptal", "cancel", "kuyruktemizle", "takip", "takiplistesi", "takipbirak", "konubagla", "konu", "settopic", "konular", "topics", "konusil", "deltopic", "istek", "istekler", "requests", "kontrol", "dogrula", "check", "sentinel", "oto_tara", "doktor", "guardian"]))
         async def handle_private_text_search(client: Client, message: Message):
+            u_id = message.from_user.id if message.from_user else 0
             text = (message.text or "").strip()
-            if not text or text.startswith("/"):
+            if not text:
+                return
+
+            # Admin Üyeye Özel Mesaj Gönderim Durumu
+            if u_id in config.admin_ids and u_id in self.waiting_admin_messages:
+                if text.lower() in ["/iptal", "iptal", "/cancel", "cancel", "vazgeç", "vazgec"]:
+                    self.waiting_admin_messages.pop(u_id, None)
+                    await message.reply_text("❌ Mesaj gönderme işlemi iptal edildi.")
+                    return
+
+                target_info = self.waiting_admin_messages.pop(u_id)
+                target_uid = target_info["target_user_id"]
+                target_uname = target_info.get("target_user_name", "Üye")
+                req_query = target_info.get("query", "")
+                req_id = target_info.get("req_id", 0)
+
+                admin_display = message.from_user.first_name if message.from_user else "Yönetici (Dark)"
+
+                req_footer = f"\n\n📌 *İlgili İstek:* `{req_query}` (İstek `#{req_id}`)" if req_id else ""
+                msg_to_user = (
+                    f"💬 **Yönetici Özel Mesajı ({admin_display}):**\n\n"
+                    f"{text}"
+                    f"{req_footer}\n\n"
+                    f"*(Bu mesaja doğrudan yanıt vererek yöneticiye cevap yazabilirsiniz)*"
+                )
+
+                try:
+                    await self.app.send_message(chat_id=target_uid, text=msg_to_user)
+                    await message.reply_text(
+                        f"✅ Mesajınız **[{target_uname}](tg://user?id={target_uid})** (`{target_uid}`) kullanıcısına özelden başarıyla iletildi!"
+                    )
+                except Exception as ex:
+                    await message.reply_text(
+                        f"⚠️ Mesaj iletilemedi: {ex}\n"
+                        f"*(Kullanıcı botu engellemiş veya gizlilik ayarları nedeniyle bota özel mesaj izni vermemiş olabilir)*"
+                    )
+                return
+
+            # Normal Üyenin Yöneticinin Mesajına Yanıtı (Reply)
+            if message.reply_to_message and "Yönetici Özel Mesajı" in (message.reply_to_message.text or ""):
+                member_name = message.from_user.first_name if message.from_user else "Üye"
+                reply_btn = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💬 Tekrar Yanıtla", callback_data=f"req_msg_uid:{u_id}")]
+                ])
+                for adm_id in config.admin_ids:
+                    try:
+                        await self.app.send_message(
+                            chat_id=adm_id,
+                            text=(
+                                f"📨 **İçerik İsteyen Üyeden Yanıt Geldi!**\n\n"
+                                f"👤 **Üye:** [{member_name}](tg://user?id={u_id}) (`{u_id}`)\n"
+                                f"💬 **Mesajı:**\n{text}"
+                            ),
+                            reply_markup=reply_btn
+                        )
+                    except Exception:
+                        pass
+                await message.reply_text("✅ Yanıtınız yöneticiye (Dark) iletildi!")
+                return
+
+            if text.startswith("/"):
                 return
             query = text
             msg = await message.reply_text(f"🔍 **'{query}'** tüm DarkBox eklentilerinde aranıyor...")
@@ -1460,7 +1551,81 @@ class DiziBotManager:
                 except Exception:
                     pass
 
-            # 7. Durum Canlı Yenileme Butonu
+            # 7. Admin İstek Sahibine Özel Mesaj Gönder Butonu
+            elif data.startswith("req_msg:"):
+                if user_id not in config.admin_ids:
+                    await query.answer("⚠️ Sadece yöneticiler mesaj gönderebilir.", show_alert=True)
+                    return
+                req_id = int(data.split(":")[1])
+                req = db.get_request(req_id)
+                if not req or not req.get("user_id"):
+                    await query.answer("⚠️ İstek sahibi bilgisi bulunamadı.", show_alert=True)
+                    return
+
+                target_uid = req["user_id"]
+                target_uname = req.get("user_name", "Üye")
+                req_query = req.get("query", "")
+
+                self.waiting_admin_messages[user_id] = {
+                    "req_id": req_id,
+                    "target_user_id": target_uid,
+                    "target_user_name": target_uname,
+                    "query": req_query
+                }
+
+                cancel_btn = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("❌ İptal Et", callback_data="req_cancel_msg")]
+                ])
+                try:
+                    await query.answer()
+                except Exception:
+                    pass
+                await query.message.reply_text(
+                    f"💬 **[{target_uname}](tg://user?id={target_uid})** kullanıcısına iletmek istediğiniz özel mesajı buraya yazın:\n\n"
+                    f"🎬 *İçerik:* `{req_query}` (İstek `#{req_id}`)\n\n"
+                    f"*(Vazgeçmek için aşağıdaki butona basabilir veya `/iptal` yazabilirsiniz)*",
+                    reply_markup=cancel_btn
+                )
+
+            elif data.startswith("req_msg_uid:"):
+                if user_id not in config.admin_ids:
+                    await query.answer("⚠️ Sadece yöneticiler mesaj gönderebilir.", show_alert=True)
+                    return
+                target_uid = int(data.split(":")[1])
+                target_uname = f"Üye ({target_uid})"
+
+                self.waiting_admin_messages[user_id] = {
+                    "req_id": 0,
+                    "target_user_id": target_uid,
+                    "target_user_name": target_uname,
+                    "query": ""
+                }
+
+                cancel_btn = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("❌ İptal Et", callback_data="req_cancel_msg")]
+                ])
+                try:
+                    await query.answer()
+                except Exception:
+                    pass
+                await query.message.reply_text(
+                    f"💬 **[{target_uname}](tg://user?id={target_uid})** kullanıcısına iletmek istediğiniz mesajı buraya yazın:\n\n"
+                    f"*(Vazgeçmek için aşağıdaki butona basabilir veya `/iptal` yazabilirsiniz)*",
+                    reply_markup=cancel_btn
+                )
+
+            elif data == "req_cancel_msg":
+                if user_id in self.waiting_admin_messages:
+                    self.waiting_admin_messages.pop(user_id, None)
+                    await query.answer("❌ Mesaj gönderme işlemi iptal edildi.")
+                    try:
+                        await query.message.edit_text("❌ **Mesaj gönderme işlemi iptal edildi.**")
+                    except Exception:
+                        pass
+                else:
+                    await query.answer("Aktif bir mesaj gönderme işlemi yok.")
+
+            # 8. Durum Canlı Yenileme Butonu
             elif data == "status_ref":
                 try:
                     await query.answer("🔄 Durum güncellendi.")
