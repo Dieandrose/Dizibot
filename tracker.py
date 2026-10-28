@@ -58,21 +58,23 @@ class WatchlistTracker:
         return t.strip()
 
     async def check_recent_feeds(self, max_pages: int = 3):
-        """DizipalX ve Dizipal3 güncel akışını tarar; grupta kategorisi olan eksik bölümleri kuyruğa ekler."""
-        logger.info("📡 Güncel bölümler akışı (DizipalX & Dizipal3) kontrol ediliyor...")
+        """DizipalX, Dizipal3 ve Dizipal2 güncel akışını tarar; grupta kategorisi olan eksik bölümleri kuyruğa ekler."""
+        logger.info("📡 Güncel bölümler akışı (DizipalX, Dizipal3 & Dizipal2) kontrol ediliyor...")
         try:
             from Plugins.DizipalX import DizipalX
             from Plugins.Dizipal3 import Dizipal3
+            from Plugins.Dizipal2 import Dizipal2
 
             dx = DizipalX()
             d3 = Dizipal3()
+            d2 = Dizipal2()
 
             candidates = []
 
             # 1. DizipalX Güncel Bölümler
             for page in range(1, max_pages + 1):
                 try:
-                    items_x = await dx.get_main_page(1, url=f"https://dizipal1592.com/yeni-eklenen-bolumler?sayfa={page}")
+                    items_x = await dx.get_main_page(1, url=f"{dx.main_url}/yeni-eklenen-bolumler?sayfa={page}")
                     for it in items_x:
                         candidates.append(("DizipalX", it))
                 except Exception as ex:
@@ -81,13 +83,23 @@ class WatchlistTracker:
             # 2. Dizipal3 Yeni Eklenen Bölümler
             for page in range(1, max_pages + 1):
                 try:
-                    items_3 = await d3.get_main_page(1, url=f"https://dizipal1822.com/yeni-eklenen-bolumler?&page={page}")
+                    items_3 = await d3.get_main_page(1, url=f"{d3.main_url}/yeni-eklenen-bolumler?&page={page}")
                     for it in items_3:
                         candidates.append(("Dizipal3", it))
                 except Exception as ex:
                     logger.debug(f"Dizipal3 sayfa {page} hatası: {ex}")
 
+            # 3. Dizipal2 Yeni Eklenen Bölümler
+            for page in range(1, max_pages + 1):
+                try:
+                    items_2 = await d2.get_main_page(page, url=f"{d2.main_url}/yeni-eklenen-bolumler")
+                    for it in items_2:
+                        candidates.append(("Dizipal2", it))
+                except Exception as ex:
+                    logger.debug(f"Dizipal2 sayfa {page} hatası: {ex}")
+
             added_count = 0
+            seen_in_batch = set()
             for plugin_name, it in candidates:
                 raw_title = it.title.strip()
                 s_num, e_num = self._parse_season_episode(raw_title, it.url)
@@ -95,6 +107,11 @@ class WatchlistTracker:
                     continue
 
                 clean_title = self._clean_series_title(raw_title)
+
+                # Aynı taramada mükerrer eklemeyi engelle
+                if (clean_title, s_num, e_num) in seen_in_batch:
+                    continue
+                seen_in_batch.add((clean_title, s_num, e_num))
 
                 # Grupta forum konusu (kategorisi) mevcut mu?
                 topic_id = db.get_topic_id(clean_title)
@@ -173,7 +190,7 @@ class WatchlistTracker:
         logger.info("🚀 DiziBot Otomatik Akış & Takip Servisi başlatıldı.")
         while self.is_running:
             try:
-                # 1. DizipalX & Dizipal3 Güncel Bölümler Akışını Tara
+                # 1. DizipalX, Dizipal3 & Dizipal2 Güncel Bölümler Akışını Tara
                 await self.check_recent_feeds(max_pages=3)
 
                 # 2. Watchlist dizilerini tara
