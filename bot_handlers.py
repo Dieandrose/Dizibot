@@ -136,14 +136,21 @@ class DiziBotManager:
     def _preempt_low_priority_jobs_if_needed(self):
         """Kullanıcı VIP talebi (öncelik 10) geldiğinde çalışan düşük öncelikli (priority <= 3) işleri duraklatıp kuyruğa alır."""
         try:
+            preempted = False
             for j_id, task in list(ACTIVE_TASKS.items()):
                 item = db.get_queue_item(j_id)
                 if item and (item.get("priority") or 0) <= 3:
                     logger.info(f"⚡ [QoS Preemption]: VIP kullanıcı talebi geldi. Düşük öncelikli iş #{j_id} ({item.get('title')}) duraklatılarak kuyruğa geri alınıyor.")
                     task.cancel()
+                    ACTIVE_TASKS.pop(j_id, None)
+                    LIVE_TRANSFERS.pop(j_id, None)
+                    self._stagger_released.pop(j_id, None)
                     with db._get_conn() as conn:
                         conn.cursor().execute("UPDATE download_queue SET status = 'queued', progress = 0.0, updated_at = ? WHERE id = ?", (time.time(), j_id))
                         conn.commit()
+                    preempted = True
+            if preempted:
+                asyncio.create_task(self.process_queue())
         except Exception as e:
             logger.debug(f"Preemption kontrol hatası: {e}")
 
@@ -2537,8 +2544,10 @@ class DiziBotManager:
             if not uploaded_ok and not db.is_job_cancelled(job_id):
                 db.update_queue_progress(job_id, "failed", error_msg="Tüm alternatif akışlar başarısız oldu")
         except asyncio.CancelledError:
-            logger.info(f"🛑 İşlem #{job_id} ({disp_title}) iptal edildi ve anında durduruldu.")
-            db.cancel_queue_item(job_id)
+            logger.info(f"🛑 İşlem #{job_id} ({disp_title}) durduruldu/iptal edildi.")
+            cur_item = db.get_queue_item(job_id)
+            if not cur_item or cur_item.get("status") != "queued":
+                db.cancel_queue_item(job_id)
             LIVE_TRANSFERS.pop(job_id, None)
             for p in TEMP_DIR.glob(f"job_{job_id}_*"):
                 try:
@@ -2625,6 +2634,13 @@ class DiziBotManager:
 
     def can_dispatch_next_worker(self) -> bool:
         """İkinci/sonraki işin yalnızca mevcut aktif indirmeler en az %15'e ulaştığında başlamasını sağlar."""
+        # 1. Tamamlanmış, iptal edilmiş veya ölü task'leri temizle
+        for j_id, task in list(ACTIVE_TASKS.items()):
+            if task is None or task.done():
+                ACTIVE_TASKS.pop(j_id, None)
+                LIVE_TRANSFERS.pop(j_id, None)
+                self._stagger_released.pop(j_id, None)
+
         if len(ACTIVE_TASKS) >= config.max_concurrent_workers:
             return False
         if not ACTIVE_TASKS:
