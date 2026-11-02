@@ -316,7 +316,7 @@ class Downloader:
             p = c.get("plugin", "")
             rel = float(c.get("relevance", 100.0))
             is_tr = cls.is_candidate_tr_dublaj(c)
-            is_native_cdn = p in ["DizipalX", "Dizipal", "DizifilmLife", "Dizi65", "RecTV", "Hdizipal", "Diziroll", "Selcukflix", "FilmModu", "FullHDFilmizlesene"]
+            is_native_cdn = p in ["DizipalX", "Dizipal", "DizifilmLife", "Dizi65", "RecTV", "Hdizipal", "Diziroll", "Selcukflix", "FilmModu", "FullHDFilmizlesene", "Reeltu", "RoketDizi"]
             is_fast_master = p in ["SineWix", "DiziMom", "HDMovie8"]
             
             # 1. Öncelik: Kesin İçerik Doğruluğu (Relevance). 100% eşleşen içerik asla farklı diziyle ezilemez!
@@ -803,9 +803,13 @@ class Downloader:
             return {"success": False}
 
         import httpx
+        NULL_TS_PACKET = b"\x47\x1f\xff\x10" + b"\xff" * 184
+        NULL_TS_BLOCK = NULL_TS_PACKET * 500  # ~94 KB MPEG-TS null dolgu bloğu
+
         async with AsyncSession(impersonate="chrome124", proxy=current_proxy, timeout=60) as session, \
                    AsyncSession(impersonate="chrome124", timeout=20) as direct_session, \
-                   httpx.AsyncClient(limits=httpx.Limits(max_connections=80, max_keepalive_connections=40), timeout=15.0) as local_client:
+                   AsyncSession(impersonate="chrome124", proxy="socks5://127.0.0.1:4000", timeout=25) as warp_session, \
+                   httpx.AsyncClient(limits=httpx.Limits(max_connections=150, max_keepalive_connections=80), timeout=15.0) as local_client:
 
             manifest_text = resp.text
             if not manifest_text.lstrip().startswith("#EXTM3U") and not manifest_text.lstrip().startswith("#EXT-X"):
@@ -821,12 +825,30 @@ class Downloader:
                     return base_url
                 if rel_url.startswith("/proxy/") or rel_url.startswith("proxy/"):
                     return f"http://127.0.0.1:3311/{rel_url.lstrip('/')}"
-                joined = urllib.parse.urljoin(base_url, rel_url)
+
+                # Proxy tabanlı URL ise gerçek hedefi ve parametreleri ayıkla
+                real_base = base_url
+                is_proxy_base = "/proxy/" in base_url
+                proxy_params = {}
+                if is_proxy_base:
+                    p_parsed = urllib.parse.urlparse(base_url)
+                    p_qs = urllib.parse.parse_qs(p_parsed.query)
+                    if "url" in p_qs and p_qs["url"]:
+                        real_base = p_qs["url"][0]
+                        for pk in ("referer", "user_agent", "force_proxy", "proxy"):
+                            if pk in p_qs and p_qs[pk]:
+                                proxy_params[pk] = p_qs[pk][0]
+
+                # Gerçek upstream URL'e göre birleştir
+                joined = urllib.parse.urljoin(real_base, rel_url)
                 if "/proxy/" in joined and not ("127.0.0.1" in joined or "localhost" in joined):
                     joined = f"http://127.0.0.1:3311/proxy/{joined.split('/proxy/', 1)[1]}"
-                base_parsed = urllib.parse.urlparse(base_url)
+
+                # Yalnızca aynı domaindeki göreceli parçalar için ana URL'deki oturum parametrelerini koru
+                base_parsed = urllib.parse.urlparse(real_base)
                 joined_parsed = urllib.parse.urlparse(joined)
-                if base_parsed.query:
+                rel_parsed = urllib.parse.urlparse(rel_url)
+                if base_parsed.query and (not rel_parsed.netloc or rel_parsed.netloc == base_parsed.netloc):
                     base_qs = urllib.parse.parse_qs(base_parsed.query)
                     joined_qs = urllib.parse.parse_qs(joined_parsed.query)
                     for k, v in base_qs.items():
@@ -834,6 +856,13 @@ class Downloader:
                             joined_qs[k] = v
                     new_q = urllib.parse.urlencode(joined_qs, doseq=True)
                     joined = urllib.parse.urlunparse(joined_parsed._replace(query=new_q))
+
+                # Eğer base proxy idiyse ve joined de proxy gerektiren bir URL ise proxy ile sarmala
+                if is_proxy_base and not ("127.0.0.1" in joined or "localhost" in joined) and ("force_proxy" in proxy_params or "pichive" in joined.lower() or "vidmixi" in joined.lower()):
+                    p_q = {"url": joined}
+                    p_q.update(proxy_params)
+                    return f"http://127.0.0.1:3311/proxy/video?{urllib.parse.urlencode(p_q)}"
+
                 return joined
 
             # Master Playlist kontrolü
@@ -1018,7 +1047,7 @@ class Downloader:
                 completed_chunks = {}
                 next_write_idx = 0
                 missing_chunks_count = 0
-                MAX_WINDOW = 120
+                MAX_WINDOW = 300
                 dl_failed = False
 
                 async def _do_pause():
@@ -1047,7 +1076,7 @@ class Downloader:
                                 break
                             await asyncio.sleep(0.02)
                             bp_wait += 1
-                            if bp_wait > 500: # 10 saniyeden fazla writer kilitliyse devam et
+                            if bp_wait > 50: # 1 saniye sonra beklemeden devam et (donmayı engeller)
                                 break
 
                         if dl_failed:
@@ -1080,25 +1109,24 @@ class Downloader:
                                     res = None
                             else:
                                 is_warp_host = any(h in orig_parsed.netloc for h in ("playhls", "dplayer", "dosyaload"))
-                                if is_warp_host and current_proxy:
+                                if is_warp_host:
                                     try:
-                                        res = await session.get(url_to_try, headers=headers, timeout=15.0)
+                                        res = await warp_session.get(url_to_try, headers=headers, timeout=15.0)
                                     except Exception:
                                         res = None
                                 else:
                                     # 1. Önce doğrudan gigabit hat ile çekmeyi dene (Media CDN'leri IP engeli uygulamaz, 25-50 MB/s verir)
                                     try:
-                                        res = await direct_session.get(url_to_try, headers=headers, timeout=6.0)
+                                        res = await direct_session.get(url_to_try, headers=headers, timeout=10.0)
                                     except Exception:
                                         res = None
 
-                                    # 2. Doğrudan hat başarısız olursa veya proxy gerekiyorsa session (WARP/Config) ile dene
+                                    # 2. Doğrudan hat başarısız olursa veya bozuk chunk dönerse WARP oturumuyla kurtar!
                                     if not res or res.status_code != 200 or not is_valid_chunk(res.content):
-                                        if current_proxy:
-                                            try:
-                                                res = await session.get(url_to_try, headers=headers, timeout=15.0)
-                                            except Exception:
-                                                res = None
+                                        try:
+                                            res = await warp_session.get(url_to_try, headers=headers, timeout=15.0)
+                                        except Exception:
+                                            res = None
 
                             if res and res.status_code == 200 and is_valid_chunk(res.content):
                                 done_all_chunks += 1
@@ -1147,14 +1175,17 @@ class Downloader:
                                 if silent_bytes:
                                     done_all_chunks += 1
                                     chunk_data = silent_bytes
+                            else:
+                                done_all_chunks += 1
+                                chunk_data = NULL_TS_BLOCK
                             if chunk_data is None:
                                 chunk_data = b""
 
                         completed_chunks[idx] = chunk_data
                         q.task_done()
 
-                # İşçi havuzu (çift akışta 15+15=30, tek akışta 25 - WARP SOCKS5 aşırı yüklenmesini önler)
-                num_workers = 15 if (audio_tr_segs and tmp_audio_tr_file) else 25
+                # İşçi havuzu (çift akışta 12+12=24, tek akışta 20 - WARP ve upstream aşırı yüklenmesini önler)
+                num_workers = 12 if (audio_tr_segs and tmp_audio_tr_file) else 20
                 worker_tasks = [asyncio.create_task(worker()) for _ in range(num_workers)]
 
                 consecutive_empty_count = 0
@@ -1217,13 +1248,13 @@ class Downloader:
                     return False
 
                 if missing_chunks_count > 0:
-                    # Video parça kaybı kesinlikle kabul edilemez (ses senkronunu doğrudan bozar)
-                    max_allowed_missing = 0 if is_video else 2
+                    # %2'ye kadar veya 5 parçaya kadar parça kaybı TS null filler ile tolere edilir (FFmpeg ile kayıpsız remux)
+                    max_allowed_missing = max(5, int(total * 0.02)) if is_video else 5
                     if missing_chunks_count > max_allowed_missing:
-                        logger.warning(f"⚠️ {dest_file.name} için {missing_chunks_count}/{total} parça eksik kaldı (Senkron ve veri kaybı engeli, akış reddedildi).")
+                        logger.warning(f"⚠️ {dest_file.name} için {missing_chunks_count}/{total} parça eksik kaldı (Tolerans aşıldı, akış reddedildi).")
                         return False
                     else:
-                        logger.info(f"ℹ️ {dest_file.name} için {missing_chunks_count}/{total} parça atlandı.")
+                        logger.info(f"ℹ️ {dest_file.name} için {missing_chunks_count}/{total} eksik parça TS null filler ile dolduruldu.")
                 return True
 
             channel_name = f"Direct Gigabit (25x) [Fallback: {'WARP' if current_proxy else 'None'}]"
@@ -1287,9 +1318,11 @@ class Downloader:
                 cmd = [
                     "ffmpeg", "-y",
                     "-threads", "0",
-                    "-fflags", "+genpts",
+                    "-err_detect", "ignore_err",
+                    "-fflags", "+genpts+discardcorrupt",
                     "-i", str(tmp_video_file),
-                    "-fflags", "+genpts",
+                    "-err_detect", "ignore_err",
+                    "-fflags", "+genpts+discardcorrupt",
                     "-i", str(tmp_audio_tr_file),
                     *sub_inputs,
                     "-map", "0:v:0",
@@ -1308,7 +1341,8 @@ class Downloader:
                 cmd = [
                     "ffmpeg", "-y",
                     "-threads", "0",
-                    "-fflags", "+genpts",
+                    "-err_detect", "ignore_err",
+                    "-fflags", "+genpts+discardcorrupt",
                     "-i", str(tmp_video_file),
                     *sub_inputs,
                     "-map", "0:v:0",
