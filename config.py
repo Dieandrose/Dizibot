@@ -48,7 +48,7 @@ class Config:
         self.max_concurrent_workers: int = 2  # Çift eşzamanlı indirme ve pipelined yükleme
         self.min_free_disk_gb: float = 3.0  # Minimum boş disk alanı
         self.plugins_priority: List[str] = [
-            "Darkboxx", "Dizipal", "DizipalX", "Hdizipal", "Dizi65", "Dizirella", "Diziyou", "Dizilab", "Dizigom", "Diziroll", "RecTV", "SineWix", 
+            "Darkboxx", "Dizipal", "DizipalX", "Reeltu", "Hdizipal", "Dizi65", "Dizirella", "Diziyou", "Dizilab", "Dizigom", "Diziroll", "RecTV", "SineWix",
             "FullHDFilmizlesene", "JetFilmIzle", "FilmMakinesi"
         ]
         self.load()

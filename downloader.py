@@ -172,7 +172,7 @@ class Downloader:
 
         # En popüler / öncelikli dizi ve film eklentileri
         top_priority = [
-            "Darkboxx", "Dizipal", "DizipalX", "Ddizi", "Hdizipal", "Dizi65", "Dizirella", "Diziyou", "Dizilab", "Dizigom", "Diziroll", "RecTV", "SineWix", 
+            "Darkboxx", "Dizipal", "DizipalX", "Reeltu", "Ddizi", "Hdizipal", "Dizi65", "Dizirella", "Diziyou", "Dizilab", "Dizigom", "Diziroll", "RecTV", "SineWix", 
             "FilmMakinesi", "FullHDFilmizlesene", "HDFilmCehennemi", "FilmModu", 
             "JetFilmIzle", "Selcukflix", "SetFilmizle", "WebteIzle",
             "Dizimom", "Dizimia", "Dizibal", "Dizibol", "DiziKorea",
