@@ -867,10 +867,10 @@ class Downloader:
 
             # Master Playlist kontrolü
             has_turkish_audio_track = False
-            if any("#EXT-X-STREAM-INF" in l for l in lines) or any("#EXT-X-MEDIA:TYPE=" in l for l in lines):
+            if any("#EXT-X-STREAM-INF" in l for l in lines) or any("#EXT-X-MEDIA" in l for l in lines):
                 # Tekil Ses Akışı Tespiti (Varsa Türkçe veya Birincil Ses)
                 for l in lines:
-                    if l.startswith("#EXT-X-MEDIA:TYPE=AUDIO"):
+                    if l.startswith("#EXT-X-MEDIA") and "TYPE=AUDIO" in l:
                         m_uri = re.search(r'URI=["\']?([^"\',]+)["\']?', l)
                         m_name = re.search(r'NAME=["\']?([^"\',]+)["\']?', l)
                         m_lang = re.search(r'LANGUAGE=["\']?([^"\',]+)["\']?', l)
@@ -882,7 +882,7 @@ class Downloader:
                                 audio_tr_url = u
                                 has_turkish_audio_track = True
                                 break
-                            elif not audio_tr_url:
+                            else:
                                 audio_tr_url = u
 
                 # 720p / HD (< 2GB) Video Akışı Tespiti
@@ -967,21 +967,33 @@ class Downloader:
                                             key_iv = bytes.fromhex(m_iv.group(1))
                                 except Exception as ke:
                                     logger.debug(f"AES Key indirme hatası: {ke}")
+                        elif ln.startswith("#EXT-X-MAP:"):
+                            m_map = re.search(r'URI=["\']?([^"\',]+)["\']?', ln)
+                            if m_map:
+                                map_url = safe_urljoin(url, m_map.group(1))
+                                try:
+                                    m_sess = direct_session if ("127.0.0.1" in map_url or "localhost" in map_url) else session
+                                    rm = await m_sess.get(map_url, headers=headers, timeout=12.0)
+                                    if rm.status_code == 200 and rm.content:
+                                        init_bytes = rm.content
+                                        logger.info(f"ℹ️ fMP4/CMAF init segment ({len(init_bytes)} byte) başarıyla indirildi: {m_map.group(1)}")
+                                except Exception as me:
+                                    logger.warning(f"fMP4 init segment indirme hatası: {me}")
                                     
                     seg_urls = []
                     for ln in m_lines:
                         if not ln.startswith("#"):
                             seg_urls.append(safe_urljoin(url, ln))
-                    return seg_urls, key_bytes, key_iv
+                    return seg_urls, key_bytes, key_iv, init_bytes
                 except Exception as e:
                     logger.debug(f"get_segments_and_key hatası: {e}")
-                    return [], None, None
+                    return [], None, None, None
 
             if not video_target_url:
                 video_target_url = stream_url
 
-            video_segs, v_key_bytes, v_key_iv = await get_segments_and_key(video_target_url)
-            audio_tr_segs, a_key_bytes, a_key_iv = (await get_segments_and_key(audio_tr_url)) if audio_tr_url else ([], None, None)
+            video_segs, v_key_bytes, v_key_iv, v_init_bytes = await get_segments_and_key(video_target_url)
+            audio_tr_segs, a_key_bytes, a_key_iv, a_init_bytes = (await get_segments_and_key(audio_tr_url)) if audio_tr_url else ([], None, None, None)
 
             if not video_segs:
                 logger.warning("HLS video segmentleri bulunamadı.")
@@ -1000,6 +1012,7 @@ class Downloader:
                 dest_file: Path, 
                 key_bytes: Optional[bytes] = None, 
                 key_iv: Optional[bytes] = None, 
+                init_bytes: Optional[bytes] = None,
                 is_video: bool = True
             ):
                 total = len(seg_list)
@@ -1191,6 +1204,8 @@ class Downloader:
                 consecutive_empty_count = 0
                 eof_reached = False
                 with open(dest_file, "wb") as f_out:
+                    if init_bytes:
+                        f_out.write(init_bytes)
                     while next_write_idx < total:
                         await _do_pause()
                         if cancel_check and cancel_check():
@@ -1259,9 +1274,9 @@ class Downloader:
 
             channel_name = f"Direct Gigabit (25x) [Fallback: {'WARP' if current_proxy else 'None'}]"
             logger.info(f"HLS İndiriliyor (Hızlı): Video={len(video_segs)} parça" + (f", Ses={len(audio_tr_segs)} parça" if audio_tr_segs else "") + f" [{channel_name}]")
-            dl_tasks = [download_seg_list(video_segs, tmp_video_file, key_bytes=v_key_bytes, key_iv=v_key_iv, is_video=True)]
+            dl_tasks = [download_seg_list(video_segs, tmp_video_file, key_bytes=v_key_bytes, key_iv=v_key_iv, init_bytes=v_init_bytes, is_video=True)]
             if audio_tr_segs and tmp_audio_tr_file:
-                dl_tasks.append(download_seg_list(audio_tr_segs, tmp_audio_tr_file, key_bytes=a_key_bytes, key_iv=a_key_iv, is_video=False))
+                dl_tasks.append(download_seg_list(audio_tr_segs, tmp_audio_tr_file, key_bytes=a_key_bytes, key_iv=a_key_iv, init_bytes=a_init_bytes, is_video=False))
             
             results = await asyncio.gather(*dl_tasks)
             if not all(results):
