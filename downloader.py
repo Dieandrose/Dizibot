@@ -502,7 +502,7 @@ class Downloader:
         clean_title = re.sub(r'\s*\d+\.\s*Sezon.*$', '', clean_title, flags=re.I).strip()
         try:
             async with httpx.AsyncClient(timeout=4.0) as client:
-                tmdb_url = f"https://mid.vidzee.wtf/tmdb/search/multi?query={urllib.parse.quote(clean_title)}&page=1&include_adult=false&api_key=adc48d20c0956934fb224de5c40bb85d&language=tr-TR"
+                tmdb_url = f"https://api.themoviedb.org/3/search/multi?query={urllib.parse.quote(clean_title)}&page=1&include_adult=false&api_key=adc48d20c0956934fb224de5c40bb85d&language=tr-TR"
                 res = await client.get(tmdb_url)
                 if res.status_code == 200:
                     data = res.json()
@@ -641,7 +641,7 @@ class Downloader:
         # 1. TMDB -> IMDB ID tespiti
         async with httpx.AsyncClient(timeout=8.0) as client:
             try:
-                tmdb_url = f"https://mid.vidzee.wtf/tmdb/search/multi?query={urllib.parse.quote(clean_title)}&page=1&include_adult=false&api_key=adc48d20c0956934fb224de5c40bb85d&language=tr-TR"
+                tmdb_url = f"https://api.themoviedb.org/3/search/multi?query={urllib.parse.quote(clean_title)}&page=1&include_adult=false&api_key=adc48d20c0956934fb224de5c40bb85d&language=tr-TR"
                 res = await client.get(tmdb_url)
                 if res.status_code == 200:
                     data = res.json()
@@ -649,7 +649,7 @@ class Downloader:
                     if results:
                         tmdb_id = results[0].get("id")
                         media_type = results[0].get("media_type", "movie" if is_movie else "tv")
-                        ext_url = f"https://mid.vidzee.wtf/tmdb/{media_type}/{tmdb_id}/external_ids?api_key=adc48d20c0956934fb224de5c40bb85d"
+                        ext_url = f"https://api.themoviedb.org/3/{media_type}/{tmdb_id}/external_ids?api_key=adc48d20c0956934fb224de5c40bb85d"
                         ext_res = await client.get(ext_url)
                         if ext_res.status_code == 200:
                             imdb_id = ext_res.json().get("imdb_id")
@@ -946,11 +946,12 @@ class Downloader:
                     s_to_use = direct_session if ("127.0.0.1" in url or "localhost" in url) else session
                     r = await s_to_use.get(url, headers=headers, timeout=10.0)
                     if r.status_code != 200 or not r.text or (not r.text.lstrip().startswith("#EXTM3U") and not r.text.lstrip().startswith("#EXT-X")):
-                        return [], None, None
+                        return [], None, None, None
                     m_lines = [ln.strip() for ln in r.text.splitlines() if ln.strip()]
                     
                     key_bytes = None
                     key_iv = None
+                    init_bytes = None
                     for ln in m_lines:
                         if ln.startswith("#EXT-X-KEY:"):
                             m_method = re.search(r'METHOD=([^,\s]+)', ln)
