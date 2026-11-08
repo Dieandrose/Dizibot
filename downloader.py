@@ -172,7 +172,7 @@ class Downloader:
 
         # En popüler / öncelikli dizi ve film eklentileri
         top_priority = [
-            "Darkboxx", "Dizipal", "DizipalX", "Reeltu", "Ddizi", "Hdizipal", "Dizi65", "Dizirella", "Diziyou", "Dizilab", "Dizigom", "Diziroll", "RecTV", "SineWix", 
+            "Dark", "SeyirKutusu", "Darkboxx", "Dizipal", "DizipalX", "Reeltu", "Ddizi", "Hdizipal", "Dizi65", "Dizirella", "Diziyou", "Dizilab", "Dizigom", "Diziroll", "RecTV", "SineWix", 
             "FilmMakinesi", "FullHDFilmizlesene", "HDFilmCehennemi", "FilmModu", 
             "JetFilmIzle", "Selcukflix", "SetFilmizle", "WebteIzle",
             "Dizimom", "Dizimia", "Dizibal", "Dizibol", "DiziKorea",
@@ -316,7 +316,7 @@ class Downloader:
             p = c.get("plugin", "")
             rel = float(c.get("relevance", 100.0))
             is_tr = cls.is_candidate_tr_dublaj(c)
-            is_native_cdn = p in ["DizipalX", "Dizipal", "DizifilmLife", "Dizi65", "RecTV", "Hdizipal", "Diziroll", "Selcukflix", "FilmModu", "FullHDFilmizlesene", "Reeltu", "RoketDizi"]
+            is_native_cdn = p in ["Dark", "DizipalX", "Dizipal", "DizifilmLife", "Dizi65", "RecTV", "Hdizipal", "Diziroll", "Selcukflix", "FilmModu", "FullHDFilmizlesene", "Reeltu", "RoketDizi"]
             is_fast_master = p in ["SineWix", "DiziMom", "HDMovie8"]
             
             # 1. Öncelik: Kesin İçerik Doğruluğu (Relevance). 100% eşleşen içerik asla farklı diziyle ezilemez!
