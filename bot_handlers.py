@@ -120,7 +120,8 @@ class DiziBotManager:
             api_id=config.api_id,
             api_hash=config.api_hash,
             bot_token=config.bot_token,
-            proxy=proxy_dict
+            proxy=proxy_dict,
+            max_concurrent_transmissions=max(4, config.max_concurrent_workers * 2)
         )
         try:
             apply_parallel_uploader_patch(self.app)

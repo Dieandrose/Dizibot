@@ -174,7 +174,11 @@ async def parallel_save_file(
         async def worker(sess: Session):
             nonlocal uploaded_bytes, upload_error
             while True:
-                item = await queue.get()
+                try:
+                    item = await queue.get()
+                except asyncio.CancelledError:
+                    return
+
                 if item is None:
                     queue.task_done()
                     return
@@ -192,36 +196,42 @@ async def parallel_save_file(
                 )
 
                 success = False
-                for attempt in range(5):
-                    try:
-                        await sess.invoke(rpc)
-                        success = True
-                        break
-                    except StopTransmission as st:
-                        upload_error = st
-                        break
-                    except Exception as err:
-                        if attempt == 4:
-                            logger.error(f"Part #{part_idx} yükleme hatası (tükendi): {err}")
-                            upload_error = err
+                try:
+                    for attempt in range(5):
+                        try:
+                            await sess.invoke(rpc)
+                            success = True
                             break
-                        await asyncio.sleep(0.3 * (attempt + 1))
+                        except StopTransmission as st:
+                            upload_error = st
+                            break
+                        except asyncio.CancelledError as ce:
+                            upload_error = ce
+                            break
+                        except Exception as err:
+                            if attempt == 4:
+                                logger.error(f"Part #{part_idx} yükleme hatası (tükendi): {err}")
+                                upload_error = err
+                                break
+                            await asyncio.sleep(0.3 * (attempt + 1))
 
-                queue.task_done()
-
-                if success and progress and upload_error is None:
-                    async with prog_lock:
-                        uploaded_bytes += len(chunk_bytes)
-                        cur = uploaded_bytes
-                    try:
-                        if asyncio.iscoroutinefunction(progress):
-                            await progress(cur, file_size, *progress_args)
-                        else:
-                            await client.loop.run_in_executor(client.executor, progress, cur, file_size, *progress_args)
-                    except StopTransmission:
-                        upload_error = StopTransmission()
-                    except Exception:
-                        pass
+                    if success and progress and upload_error is None:
+                        async with prog_lock:
+                            uploaded_bytes += len(chunk_bytes)
+                            cur = uploaded_bytes
+                        try:
+                            if asyncio.iscoroutinefunction(progress):
+                                await progress(cur, file_size, *progress_args)
+                            else:
+                                await client.loop.run_in_executor(client.executor, progress, cur, file_size, *progress_args)
+                        except StopTransmission as st:
+                            upload_error = st
+                        except asyncio.CancelledError as ce:
+                            upload_error = ce
+                        except Exception:
+                            pass
+                finally:
+                    queue.task_done()
 
         # Her oturuma in_flight_per_session kadar worker görevi bağla
         worker_tasks = []
@@ -244,14 +254,16 @@ async def parallel_save_file(
                 await queue.put((curr_part, chunk))
                 curr_part += 1
 
-            await queue.join()
+            if upload_error is None:
+                await queue.join()
 
-            if upload_error:
+            if upload_error is not None:
                 raise upload_error
 
         finally:
-            for _ in worker_tasks:
-                await queue.put(None)
+            for t in worker_tasks:
+                if not t.done():
+                    t.cancel()
             await asyncio.gather(*worker_tasks, return_exceptions=True)
             if isinstance(path, (str, PurePath)):
                 fp.close()
