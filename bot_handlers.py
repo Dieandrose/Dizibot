@@ -2388,7 +2388,10 @@ class DiziBotManager:
                 safe_title = re.sub(r'[^a-zA-Z0-9_\-]', '_', clean_title)
                 temp_file = TEMP_DIR / f"job_{job_id}_{safe_title}_{'movie' if is_movie else f'S{season}E{episode}'}.mp4"
                 
+                _last_db_prog = 0.0
                 def prog_cb(pct: float, done_seg: int = 0, tot_seg: int = 0, cur_mb: float = 0.0, tot_mb: float = 0.0, speed_mb: float = 0.0, phase: str = "downloading"):
+                    nonlocal _last_db_prog
+                    now = time.time()
                     LIVE_TRANSFERS[job_id] = {
                         "title": disp_title,
                         "plugin": p_name,
@@ -2399,9 +2402,11 @@ class DiziBotManager:
                         "cur_mb": round(cur_mb, 1),
                         "tot_mb": round(tot_mb, 1),
                         "speed_mb": round(speed_mb, 2),
-                        "updated_at": time.time()
+                        "updated_at": now
                     }
-                    db.update_queue_progress(job_id, "downloading", 0.73 if phase == "muxing" else pct * 0.7)
+                    if now - _last_db_prog >= 1.5 or pct >= 1.0 or phase == "muxing":
+                        _last_db_prog = now
+                        db.update_queue_progress(job_id, "downloading", 0.73 if phase == "muxing" else pct * 0.7)
                     _sync_live_transfers_to_disk()
 
                     # İndirme %15 eşiğine ulaştığında sıradaki bekleyen işin indirmesini başlat
@@ -2441,9 +2446,16 @@ class DiziBotManager:
                         _cached_cancel = db.is_job_cancelled(job_id)
                     return _cached_cancel
 
+                _last_pause_ts = 0.0
+                _cached_pause = False
                 pause_signal = Path(f"/root/dizibot/data/job_{job_id}.pause")
                 async def safe_pause_check():
-                    if pause_signal.exists() or db.is_job_paused(job_id):
+                    nonlocal _last_pause_ts, _cached_pause
+                    now = time.time()
+                    if now - _last_pause_ts > 1.5:
+                        _last_pause_ts = now
+                        _cached_pause = pause_signal.exists() or db.is_job_paused(job_id)
+                    if _cached_pause:
                         if LIVE_TRANSFERS.get(job_id):
                             LIVE_TRANSFERS[job_id]["phase"] = "paused"
                             LIVE_TRANSFERS[job_id]["speed_mb"] = 0.0
@@ -2455,6 +2467,7 @@ class DiziBotManager:
                         if LIVE_TRANSFERS.get(job_id) and not db.is_job_cancelled(job_id):
                             LIVE_TRANSFERS[job_id]["phase"] = "downloading"
                             _sync_live_transfers_to_disk()
+                        _cached_pause = False
 
                 dl_res = await Downloader.download_hls_stream(
                     stream_url, 
@@ -2571,13 +2584,21 @@ class DiziBotManager:
                         last_speed_bytes = 0
                         speed_mb = 0.0
                         last_db_up = 0.0
+                        last_up_pause_ts = 0.0
+                        cached_up_pause = False
 
                         async def upload_prog(current: int, total: int):
-                            if db.is_job_cancelled(job_id):
-                                raise asyncio.CancelledError(f"İşlem #{job_id} iptal edildi")
+                            nonlocal last_up_pause_ts, cached_up_pause
+                            now = time.time()
+                            if now - last_up_pause_ts > 1.5:
+                                last_up_pause_ts = now
+                                if db.is_job_cancelled(job_id):
+                                    raise asyncio.CancelledError(f"İşlem #{job_id} iptal edildi")
+                                pause_signal = Path(f"/root/dizibot/data/job_{job_id}.pause")
+                                cached_up_pause = pause_signal.exists() or db.is_job_paused(job_id)
 
-                            pause_signal = Path(f"/root/dizibot/data/job_{job_id}.pause")
-                            if pause_signal.exists() or db.is_job_paused(job_id):
+                            if cached_up_pause:
+                                pause_signal = Path(f"/root/dizibot/data/job_{job_id}.pause")
                                 if LIVE_TRANSFERS.get(job_id):
                                     LIVE_TRANSFERS[job_id]["phase"] = "paused"
                                     LIVE_TRANSFERS[job_id]["speed_mb"] = 0.0
@@ -2589,6 +2610,7 @@ class DiziBotManager:
                                 if LIVE_TRANSFERS.get(job_id) and not db.is_job_cancelled(job_id):
                                     LIVE_TRANSFERS[job_id]["phase"] = "uploading"
                                     _sync_live_transfers_to_disk()
+                                cached_up_pause = False
 
                             nonlocal last_db_up, upload_start, last_speed_time, last_speed_bytes, speed_mb
                             now = time.time()

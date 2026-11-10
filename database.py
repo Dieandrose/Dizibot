@@ -9,24 +9,32 @@ import re
 import time
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
+from contextlib import contextmanager
 from config import DB_FILE
 
 
 class Database:
     def __init__(self, db_path: Path = DB_FILE):
         self.db_path = db_path
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
-    def _get_conn(self) -> sqlite3.Connection:
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+    @contextmanager
+    def _get_conn(self):
         conn = sqlite3.connect(str(self.db_path), timeout=30.0)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode = WAL;")
-        conn.execute("PRAGMA busy_timeout = 30000;")
-        conn.execute("PRAGMA synchronous = NORMAL;")
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def _init_db(self):
+        with sqlite3.connect(str(self.db_path), timeout=30.0) as conn:
+            conn.execute("PRAGMA journal_mode = WAL;")
+            conn.execute("PRAGMA busy_timeout = 30000;")
+            conn.execute("PRAGMA synchronous = NORMAL;")
+
         with self._get_conn() as conn:
             cur = conn.cursor()
             
