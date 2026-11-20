@@ -314,6 +314,7 @@ class Downloader:
         all_plugins = cls.get_all_plugin_names()
         def dublaj_priority_key(c):
             p = c.get("plugin", "")
+            u = c.get("url", "")
             rel = float(c.get("relevance", 100.0))
             is_tr = cls.is_candidate_tr_dublaj(c)
             is_native_cdn = p in ["Dark", "DizipalX", "Dizipal", "DizifilmLife", "Dizi65", "RecTV", "Hdizipal", "Diziroll", "Selcukflix", "FilmModu", "FullHDFilmizlesene", "Reeltu", "RoketDizi"]
@@ -327,6 +328,8 @@ class Downloader:
                 score += 800   # Yüksek hızlı statik CDN akışlarına mutlak öncelik (+800 puan)
             elif is_fast_master:
                 score += 200
+            if "/proxy/iframe" in u or ("iframe.php" in u and "/proxy/video" not in u):
+                score -= 30000  # İframe linkleri doğrudan indirilemez, en sona at!
                 
             p_idx = all_plugins.index(p) if p in all_plugins else 999
             return (-score, p_idx)
@@ -858,7 +861,9 @@ class Downloader:
                     joined = urllib.parse.urlunparse(joined_parsed._replace(query=new_q))
 
                 # Eğer base proxy idiyse ve joined de proxy gerektiren bir URL ise proxy ile sarmala
-                if is_proxy_base and not ("127.0.0.1" in joined or "localhost" in joined) and ("force_proxy" in proxy_params or "pichive" in joined.lower() or "vidmixi" in joined.lower()):
+                # NOT: Medya parçaları (.ts, .jpg, .m4s vb.) doğrudan CDN shard'ları olduğu için proxy ile sarmalanmaz!
+                is_media_chunk = any(joined.lower().split("?")[0].endswith(ext) for ext in (".ts", ".jpg", ".m4s", ".mp4", ".aac", ".bin", ".png", ".webp", ".jpeg"))
+                if is_proxy_base and not is_media_chunk and not ("127.0.0.1" in joined or "localhost" in joined) and ("force_proxy" in proxy_params or "pichive" in joined.lower() or "vidmixi" in joined.lower()):
                     p_q = {"url": joined}
                     p_q.update(proxy_params)
                     return f"http://127.0.0.1:3311/proxy/video?{urllib.parse.urlencode(p_q)}"
@@ -910,24 +915,20 @@ class Downloader:
                                 break
 
                 if variants:
-                    # Telegram limitini (2GB) aşmayacak en kaliteli varyantı seç (1500k-2400k arası 720p/1080p)
-                    v_fit = [v for v in variants if (v[1] <= 2400000 or v[1] == 0) and v[0] >= 720]
+                    # Telegram limitini (2GB) aşmayacak en kaliteli varyantı seç (1080p / 720p en yüksek bitrate)
+                    v_fit = [v for v in variants if (v[1] <= 4500000 or v[1] == 0) and v[0] >= 720]
                     if v_fit:
                         v_fit.sort(key=lambda x: (x[0], x[1]), reverse=True)
                         video_target_url = v_fit[0][2]
                     else:
                         v_720 = [v for v in variants if v[0] == 720]
                         if v_720:
-                            v_720.sort(key=lambda x: x[1])
+                            v_720.sort(key=lambda x: x[1], reverse=True)
                             video_target_url = v_720[0][2]
                         else:
-                            v_under = [v for v in variants if 480 <= v[0] <= 1080]
-                            if v_under:
-                                v_under.sort(key=lambda x: x[1])
-                                video_target_url = v_under[0][2]
-                            else:
-                                variants.sort(key=lambda x: x[1])
-                                video_target_url = variants[0][2]
+                            # Çözünürlüğü ve bitrate'i en yüksek olan varyantı seç
+                            variants.sort(key=lambda x: (x[0], x[1]), reverse=True)
+                            video_target_url = variants[0][2]
 
                     # Sessiz video (Audio olmayan) varyant kontrolü
                     has_codecs_attr = any("CODECS=" in l for l in lines)
@@ -1061,7 +1062,7 @@ class Downloader:
                 completed_chunks = {}
                 next_write_idx = 0
                 missing_chunks_count = 0
-                MAX_WINDOW = 300
+                MAX_WINDOW = 40
                 dl_failed = False
 
                 async def _do_pause():
@@ -1116,7 +1117,40 @@ class Downloader:
                                 url_to_try = f"http://127.0.0.1:3311/proxy/{url_to_try.split('/proxy/', 1)[1]}"
                             if "izle.darkbox.com.tr:9443" in url_to_try:
                                 url_to_try = url_to_try.replace("https://izle.darkbox.com.tr:9443", "http://127.0.0.1:3311")
-                            if "127.0.0.1" in url_to_try or "localhost" in url_to_try:
+
+                            # Eğer URL bir /proxy/video sarmalayıcısı ise, gerçek hedef CDN URL'sini ayıkla
+                            raw_target_url = None
+                            if "/proxy/video" in url_to_try:
+                                try:
+                                    p_parsed = urllib.parse.urlparse(url_to_try)
+                                    p_qs = urllib.parse.parse_qs(p_parsed.query)
+                                    if "url" in p_qs and p_qs["url"]:
+                                        raw_target_url = p_qs["url"][0]
+                                except Exception:
+                                    raw_target_url = None
+
+                            if raw_target_url:
+                                raw_parsed = urllib.parse.urlparse(raw_target_url)
+                                is_warp_host = any(h in raw_parsed.netloc for h in ("playhls", "dplayer", "dosyaload"))
+                                # 1. Önce doğrudan gigabit hat ile çekmeyi dene (Storage CDN shard'ları IP engelsizdir, 40-50 MB/s verir)
+                                if not is_warp_host:
+                                    try:
+                                        res = await direct_session.get(raw_target_url, headers=headers, timeout=8.0)
+                                    except Exception:
+                                        res = None
+                                # 2. Başarısız olursa doğrudan WARP ile dene
+                                if not res or res.status_code != 200 or not is_valid_chunk(res.content):
+                                    try:
+                                        res = await warp_session.get(raw_target_url, headers=headers, timeout=12.0)
+                                    except Exception:
+                                        res = None
+                                # 3. En son çare yerel 3311 proxy üzerinden dene
+                                if not res or res.status_code != 200 or not is_valid_chunk(res.content):
+                                    try:
+                                        res = await asyncio.wait_for(local_client.get(url_to_try, headers=headers), timeout=12.0)
+                                    except Exception:
+                                        res = None
+                            elif "127.0.0.1" in url_to_try or "localhost" in url_to_try:
                                 try:
                                     res = await asyncio.wait_for(local_client.get(url_to_try, headers=headers), timeout=12.0)
                                 except Exception:

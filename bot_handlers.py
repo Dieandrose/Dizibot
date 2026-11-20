@@ -2380,6 +2380,10 @@ class DiziBotManager:
                 stream_url = cand.get("url", "")
                 if not stream_url or stream_url in tested_urls:
                     continue
+                # İframe sayfaları (HTML) HLS stream olarak indirilemez, doğrudan atla
+                if stream_url.startswith("/proxy/iframe") or ("iframe.php" in stream_url and "/proxy/video" not in stream_url):
+                    logger.info(f"[{cand.get('plugin', 'Bilinmeyen')}] İframe URL'si doğrudan indirilemez, atlanıyor: {stream_url}")
+                    continue
                 tested_urls.add(stream_url)
 
                 p_name = cand.get("plugin", "Bilinmeyen")
